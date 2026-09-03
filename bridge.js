@@ -139,7 +139,9 @@ function toChatRequest(body, forcedModel) {
 			request.parallel_tool_calls = body.parallel_tool_calls
 		}
 	}
-	// Lo demas (reasoning, store, include, truncation...) no existe en Chat.
+	if (body.reasoning_effort) {
+		request.reasoning_effort = body.reasoning_effort
+	}
 	return request
 }
 

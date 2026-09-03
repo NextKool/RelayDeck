@@ -321,7 +321,7 @@ const S = {
 	list: [], sel: null, adding: false, editing: false, conflict: null,
 	reports: {}, cats: {}, res: {}, guides: {}, keys: {}, dest: 'codex',
 	q: '', filter: 'all', picked: new Set(), fold: {}, cfg: null, plan: null,
-	opts: {}, right: 'use', file: null, fileWhich: 'codex', fileDirty: false, fileProblems: [],
+	opts: {}, right: 'chat', file: null, fileWhich: 'codex', fileDirty: false, fileProblems: [],
 	scan: null, scanning: false, selectedModel: {},
 }
 
@@ -707,7 +707,7 @@ function planView() {
 /* ═════════════════════════════════════════════ panel: ajustes */
 
 const LABELS = {
-	'': '— no escribir (deja lo que haya) —',
+	'': 'Por defecto (Automático)',
 	minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh',
 	untrusted: 'untrusted — pregunta casi todo',
 	'on-request': 'on-request — pregunta cuando hace falta',
@@ -720,9 +720,8 @@ const LABELS = {
 function sel(name, key, value, help, recommendedVal) {
 	const list = S.opts[key] || []
 	const curVal = value ?? ''
-	const curLabel = LABELS[curVal] ?? (curVal || '— no escribir (deja lo que haya) —')
-	return `<div class="f"><label class="l" for="s-${name}">${esc(help)}</label>
-		<input type="hidden" id="s-${name}" name="${name}" value="${esc(curVal)}" />
+	const curLabel = LABELS[curVal] ?? (curVal || 'Por defecto (Automático)')
+	const inner = `<input type="hidden" id="s-${name}" name="${name}" value="${esc(curVal)}" />
 		<div class="c-select" data-name="${name}">
 			<button type="button" class="c-select-btn" data-a="open-c-select" data-name="${name}">
 				<span class="c-select-label" id="c-lbl-${name}">${esc(curLabel)}</span>
@@ -740,8 +739,9 @@ function sel(name, key, value, help, recommendedVal) {
 					</div>`
 				}).join('')}
 			</div>
-		</div>
-	</div>`
+		</div>`
+	if (!help) return `<div class="c-select-wrap" style="width:100%">${inner}</div>`
+	return `<div class="f"><label class="l" for="s-${name}">${esc(help)}</label>${inner}</div>`
 }
 
 function settingsFormHtml(p) {
@@ -809,23 +809,39 @@ function paneChat(p) {
 	}
 	const msgs = S.chatMessages?.[p.id + ':' + m] || []
 	const isSending = S.chatSending?.[p.id + ':' + m]
+	const testKey = p.id + ':' + m
+	const isTestingEffort = S.effortTesting?.[testKey]
+	const effortResult = S.effortTest?.[testKey]
 
 	return `<section class="pane grow" style="display:flex;flex-direction:column">
 		<h2>Chat de prueba</h2>
-		<div class="in" style="display:flex;flex-direction:column;flex:1;gap:12px">
-			<div class="note info">
-				<span class="i">ℹ</span>
-				<div>
-					<strong>Escribe abajo para verificar que el modelo responde antes de configurarlo.</strong>
+		<div class="in" style="display:flex;flex-direction:column;flex:1;gap:10px">
+			<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;background:#05090f;border:1px solid var(--line2);border-radius:var(--r);flex-wrap:wrap">
+				<div style="display:flex;align-items:center;gap:8px;flex:1;min-width:260px">
+					<span style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--txt2);white-space:nowrap">RAZONAMIENTO:</span>
+					<div style="flex:1;min-width:180px">
+						${sel('effort', 'model_reasoning_effort', p.effort ?? '', '')}
+					</div>
 				</div>
+				<button class="b" type="button" data-a="test-effort" data-p="${esc(p.id)}" data-m="${esc(m)}" style="white-space:nowrap;padding:0 12px;height:33px;font-size:11.5px" ${isTestingEffort ? 'disabled' : ''}>
+					${isTestingEffort ? '<span class="blink">Probando...</span>' : 'Probar nivel'}
+				</button>
 			</div>
+			${effortResult ? `
+				<div class="note ${effortResult.ok ? 'ok' : 'bad'}" style="margin:0;padding:7px 11px;font-size:11.5px">
+					<span class="i">${effortResult.ok ? '✓' : '!'}</span>
+					<div>${effortResult.ok
+						? `Nivel <b>"${esc(effortResult.effort)}"</b> verificado y aceptado por la API (${effortResult.ms} ms).`
+						: `La API rechazó el nivel <b>"${esc(effortResult.effort)}"</b>: ${esc(effortResult.error)}`}</div>
+				</div>
+			` : ''}
 
-			<div id="chat-log" style="flex:1;min-height:260px;max-height:420px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:10px;background:#04080c;border:1px solid var(--line2);border-radius:var(--r)">
-				${!msgs.length ? `<p class="hint" style="text-align:center;margin:auto">Escribe un mensaje abajo para probar la respuesta de <b>${esc(m)}</b> en vivo.</p>` : ''}
+			<div id="chat-log" style="flex:1;min-height:240px;max-height:400px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:10px;background:#04080c;border:1px solid var(--line2);border-radius:var(--r)">
+				${!msgs.length ? `<p class="hint" style="text-align:center;margin:auto">Escribe un mensaje abajo para probar <b>${esc(m)}</b>${p.effort ? ` con razonamiento <b>${esc(p.effort)}</b>` : ''} en vivo.</p>` : ''}
 				${msgs.map((msg) => `
 					<div style="align-self:${msg.role === 'user' ? 'flex-end' : 'flex-start'};max-width:85%;padding:8px 12px;border-radius:var(--r);background:${msg.role === 'user' ? 'rgba(0,229,255,.1)' : 'var(--pane2)'};border:1px solid ${msg.role === 'user' ? 'var(--cyan)' : 'var(--line)'}">
 						<div style="font-size:10px;font-weight:700;letter-spacing:.05em;color:${msg.role === 'user' ? 'var(--cyan)' : 'var(--lime)'};margin-bottom:3px">
-							${msg.role === 'user' ? 'TÚ' : esc(m)} ${msg.protocol ? `<span style="color:var(--cyan);font-weight:400">[${esc(protocolLabel(msg) || msg.protocol)}]</span>` : ''} ${msg.ms ? `<span style="color:var(--dim);font-weight:400">(${msg.ms} ms${msg.retries > 0 ? ` · <span style="color:var(--yellow)">⚠️ ${msg.retries} reintento${msg.retries > 1 ? 's' : ''} por saturación</span>` : ''})</span>` : ''}
+							${msg.role === 'user' ? 'TÚ' : esc(m)} ${msg.protocol ? `<span style="color:var(--cyan);font-weight:400">[${esc(protocolLabel(msg) || msg.protocol)}]</span>` : ''} ${msg.effort ? `<span style="color:var(--amber);font-weight:600">[${esc(msg.effort)}]</span>` : ''} ${msg.ms ? `<span style="color:var(--dim);font-weight:400">(${msg.ms} ms${msg.retries > 0 ? ` · <span style="color:var(--yellow)">⚠️ ${msg.retries} reintento${msg.retries > 1 ? 's' : ''}</span>` : ''})</span>` : ''}
 						</div>
 						<div style="font-size:12.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:#fff">${esc(msg.content)}</div>
 					</div>
@@ -1111,11 +1127,11 @@ function render() {
 				</div>
 			</div>
 			<div class="dest" style="border:1px solid var(--line);border-radius:var(--r);background:var(--pane)">
-				<button data-a="right" data-d="use" aria-pressed="${S.right === 'use'}">Como usarlo</button>
 				<button data-a="right" data-d="chat" aria-pressed="${S.right === 'chat'}">Chat de prueba</button>
+				<button data-a="right" data-d="use" aria-pressed="${S.right === 'use'}">Como usarlo</button>
 				<button data-a="right" data-d="files" aria-pressed="${S.right === 'files'}">Editar archivos</button>
 			</div>
-			${S.right === 'use' ? paneUse(p) : S.right === 'chat' ? paneChat(p) : paneFiles()}
+			${S.right === 'chat' ? paneChat(p) : S.right === 'use' ? paneUse(p) : paneFiles()}
 		</div>`
 }
 
@@ -1497,6 +1513,62 @@ document.addEventListener('click', async (e) => {
 		if (selBox) selBox.classList.remove('open')
 		const menu = selBox?.querySelector('.c-select-menu')
 		if (menu) menu.hidden = true
+
+		if (name === 'effort') {
+			const p = cur()
+			if (p) {
+				p.effort = val
+				delete S.guides[p.id]
+				api('/api/set-effort', { id: p.id, effort: val }).then((r) => {
+					if (r?.usage) {
+						const gKey = `${S.dest}:${curModel(p) || 'none'}`
+						S.guides[p.id] = { ...(S.guides[p.id] || {}), [gKey]: r.usage, [S.dest]: r.usage }
+					}
+				}).catch(() => {})
+				// Sincronizar todos los selectores de effort en pantalla
+				$$(`.c-select[data-name="effort"]`).forEach((box) => {
+					const l = box.querySelector('.c-select-label')
+					if (l) l.textContent = label
+					box.querySelectorAll('.c-select-item').forEach((it) => {
+						const match = it.dataset.val === val
+						it.classList.toggle('active', match)
+						const chk = it.querySelector('.c-select-check')
+						if (chk) chk.remove()
+						if (match) it.insertAdjacentHTML('beforeend', '<span class="c-select-check">✓</span>')
+					})
+				})
+				$$(`input[name="effort"]`).forEach((inp) => { inp.value = val })
+			}
+		}
+		return
+	}
+	if (a === 'test-effort') {
+		const p = cur()
+		if (!p) return
+		const targetModel = m || curModel(p)
+		if (!targetModel) return toast('Selecciona un modelo primero', true)
+		const curEffort = p.effort || ''
+		const key = p.id + ':' + targetModel
+		S.effortTesting = S.effortTesting || {}
+		S.effortTesting[key] = true
+		render()
+		try {
+			const res = await api('/api/test-effort', { id: p.id, model: targetModel, effort: curEffort })
+			S.effortTest = S.effortTest || {}
+			S.effortTest[key] = res
+			if (res.ok) {
+				toast(`✓ Nivel "${res.effort}" aceptado por la API (${res.ms} ms)`)
+			} else {
+				toast(`✕ Error: ${res.error}`, true)
+			}
+		} catch (err) {
+			S.effortTest = S.effortTest || {}
+			S.effortTest[key] = { ok: false, error: err.message, effort: curEffort || 'default' }
+			toast(`✕ Error al probar: ${err.message}`, true)
+		} finally {
+			S.effortTesting[key] = false
+			render()
+		}
 		return
 	}
 	if (a === 'showallstatus') {
@@ -1709,9 +1781,11 @@ document.addEventListener('submit', async (e) => {
 			return
 		}
 		try {
+			const pObj = S.list.find((x) => x.id === pid)
 			const res = await api('/api/chat', {
 				id: pid,
 				model: m,
+				effort: pObj?.effort || undefined,
 				messages: S.chatMessages[key].map((item) => ({ role: item.role, content: item.content })),
 			}, ctrl.signal)
 			delete S.chatControllers[key]
@@ -1721,6 +1795,7 @@ document.addEventListener('submit', async (e) => {
 				ms: res.ms,
 				protocol: res.protocol || res.target,
 				retries: res.retries || 0,
+				effort: res.effort || pObj?.effort || null,
 			})
 		} catch (err) {
 			if (err.name === 'AbortError' || err.message?.includes('aborted')) return

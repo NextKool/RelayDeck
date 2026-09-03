@@ -2053,7 +2053,8 @@ function usageGuide(provider, target = 'codex') {
 	const inConfig = configEnvKey(provider.id)
 	const envKey = inConfig || provider.envKey || ENV_KEY
 	const modelName = provider.model || '<modelo>'
-	const runCmd = `codex -c model_provider="${provider.id}" -c model="${modelName}"`
+	const effortParam = provider.effort ? ` -c model_reasoning_effort="${provider.effort}"` : ''
+	const runCmd = `codex -c model_provider="${provider.id}" -c model="${modelName}"${effortParam}`
 
 	const steps = [
 		{
@@ -2082,7 +2083,7 @@ function usageGuide(provider, target = 'codex') {
 	steps.push({
 		title: 'Arranca Codex fijando este modelo',
 		cmds: [runCmd],
-		detail: `Ejecuta este comando para arrancar directamente con "${modelName}". Te permite abrir múltiples terminales con diferentes modelos en paralelo.`,
+		detail: `Ejecuta este comando para arrancar directamente en tu terminal con "${modelName}"${provider.effort ? ` (razonamiento: ${provider.effort})` : ''}. Te permite abrir múltiples terminales con diferentes modelos o proveedores en paralelo.`,
 	})
 	steps.push({
 		title: 'Resultado esperado',
@@ -2360,16 +2361,21 @@ const routes = {
 			}
 		}
 
+		const effort = body.effort || stored?.effort || undefined
+
 		// 2. Probar OpenAI /chat/completions
+		const chatPayload = {
+			model,
+			messages: messages.map((m) => ({ role: m.role, content: String(m.content) })),
+			max_tokens: 1024,
+			stream: false,
+		}
+		if (effort) chatPayload.reasoning_effort = effort
+
 		const chatRes = await probeSmart(endpoint(baseUrl, '/chat/completions'), {
 			apiKey,
 			method: 'POST',
-			json: {
-				model,
-				messages: messages.map((m) => ({ role: m.role, content: String(m.content) })),
-				max_tokens: 1024,
-				stream: false,
-			},
+			json: chatPayload,
 		})
 		if (chatRes.ok) {
 			const replyText = chatRes.json?.choices?.[0]?.message?.content || chatRes.text
@@ -2380,22 +2386,26 @@ const routes = {
 				ms: Date.now() - started,
 				retries: chatRes.retries || 0,
 				reply: replyText,
+				effort: effort || null,
 			}
 		}
 
 		// 3. Probar /responses conservando el historial completo.
+		const respPayload = {
+			model,
+			input: messages.map((m) => ({
+				role: ['assistant', 'system'].includes(m.role) ? m.role : 'user',
+				content: String(m.content),
+			})),
+			max_output_tokens: 1024,
+			stream: false,
+		}
+		if (effort) respPayload.reasoning_effort = effort
+
 		const respRes = await probeSmart(endpoint(baseUrl, '/responses'), {
 			apiKey,
 			method: 'POST',
-			json: {
-				model,
-				input: messages.map((m) => ({
-					role: ['assistant', 'system'].includes(m.role) ? m.role : 'user',
-					content: String(m.content),
-				})),
-				max_output_tokens: 1024,
-				stream: false,
-			},
+			json: respPayload,
 		})
 		if (respRes.ok) {
 			const replyText = responseText(respRes.json) || respRes.text
@@ -2406,10 +2416,11 @@ const routes = {
 				ms: Date.now() - started,
 				retries: respRes.retries || 0,
 				reply: replyText,
+				effort: effort || null,
 			}
 		}
 
-		const failed = isClaude && anthRes ? anthRes : chatRes
+		const failed = isClaude && anthRes ? anthRes : (chatRes.httpStatus ? chatRes : respRes)
 		throw new Error(apiError(failed) || `Error al consultar el modelo (HTTP ${failed.httpStatus})`)
 	},
 
@@ -2692,6 +2703,94 @@ const routes = {
 			reapplied,
 			profilePath: reapplied ? CONFIG_PATH() : null,
 			usage: active ? usageGuide(provider) : null,
+		}
+	},
+
+	'POST /api/set-effort': async (body) => {
+		const providers = readStore()
+		const index = providers.findIndex((p) => p.id === body.id)
+		if (index < 0) throw new Error('Provider desconocido')
+
+		const effort = pick(body.effort || '', 'model_reasoning_effort')
+		const provider = { ...providers[index], effort }
+		providers[index] = provider
+
+		let reapplied = false
+		const active = stripQuotes(new TomlDoc(readConfig()).get(null, 'model_provider')) === provider.id
+		if (active && provider.model) {
+			install(provider, providers)
+			reapplied = true
+		}
+		writeStore(providers)
+		return {
+			provider: publicView(provider),
+			reapplied,
+			usage: active ? usageGuide(provider) : null,
+		}
+	},
+
+	'POST /api/test-effort': async (body) => {
+		const providers = readStore()
+		const p = providers.find((x) => x.id === body.id)
+		if (!p) throw new Error('Proveedor no encontrado')
+		const model = String(body.model || p.model || '').trim()
+		if (!model) throw new Error('Falta el modelo')
+		const effort = String(body.effort || '').trim()
+		const apiKey = p.apiKey
+		const baseUrl = p.baseUrl
+		const started = Date.now()
+
+		const chatPayload = {
+			model,
+			messages: [{ role: 'user', content: '1' }],
+			max_tokens: 1,
+			stream: false,
+		}
+		if (effort) chatPayload.reasoning_effort = effort
+
+		const chatRes = await probeSmart(endpoint(baseUrl, '/chat/completions'), {
+			apiKey,
+			method: 'POST',
+			json: chatPayload,
+			timeoutMs: 12000,
+		})
+
+		if (chatRes.ok) {
+			return { ok: true, ms: Date.now() - started, effort: effort || 'default', httpStatus: 200 }
+		}
+
+		const respPayload = {
+			model,
+			input: [{ role: 'user', content: '1' }],
+			max_output_tokens: 1,
+			stream: false,
+		}
+		if (effort) respPayload.reasoning_effort = effort
+
+		const respRes = await probeSmart(endpoint(baseUrl, '/responses'), {
+			apiKey,
+			method: 'POST',
+			json: respPayload,
+			timeoutMs: 12000,
+		})
+
+		if (respRes.ok) {
+			return { ok: true, ms: Date.now() - started, effort: effort || 'default', httpStatus: 200 }
+		}
+
+		const errMsg =
+			(chatRes.json && chatRes.json.error && chatRes.json.error.message) ||
+			(respRes.json && respRes.json.error && respRes.json.error.message) ||
+			chatRes.text ||
+			respRes.text ||
+			`Error ${chatRes.httpStatus || respRes.httpStatus || 400}`
+
+		return {
+			ok: false,
+			ms: Date.now() - started,
+			effort: effort || 'default',
+			error: errMsg,
+			httpStatus: chatRes.httpStatus || respRes.httpStatus || 400,
 		}
 	},
 
