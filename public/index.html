@@ -766,16 +766,15 @@ function settingsFormHtml(p) {
 
 /* ═════════════════════════════════════════════ panel: archivos */
 
-function paneFiles() {
+function paneFiles(embedded = false) {
 	const f = S.file
 	const probs = S.fileProblems
-	return `<section class="pane grow">
-		<h2>Archivos de configuracion<span class="sp"></span>${
-			f ? (probs.length ? tag('bad', 'no se puede guardar') : S.fileDirty ? tag('warn', 'sin guardar') : tag('ok', 'guardado')) : ''
-		}</h2>
-		<div class="dest">${[['codex','config.toml'],['claude','Claude settings.json'],['env','env de la key']]
-			.map(([w, t]) => `<button data-a="file" data-w="${w}" aria-pressed="${S.fileWhich === w}">${t}</button>`).join('')}</div>
-		<div class="in">
+	const inner = `<div class="dest" style="border-bottom:1px solid var(--line);background:#05090f">${[['codex','config.toml'],['claude','Claude settings.json'],['env','env de la key']]
+			.map(([w, t]) => `<button data-a="file" data-w="${w}" aria-pressed="${S.fileWhich === w}">${t}</button>`).join('')}
+			<span class="sp"></span>${
+				f ? (probs.length ? tag('bad', 'no se puede guardar') : S.fileDirty ? tag('warn', 'sin guardar') : tag('ok', 'guardado')) : ''
+			}</div>
+		<div class="in" style="padding:14px">
 			${!f ? `<div class="row"><button class="b go" data-a="file" data-w="${esc(S.fileWhich)}">Abrir archivo</button></div>`
 			: `<p class="hint" style="margin-bottom:8px">${esc(f.path)}${f.exists ? '' : ' — no existe todavia, se creara al guardar'}</p>
 			<textarea id="editor" spellcheck="false" data-a="fileeditor"
@@ -791,21 +790,19 @@ function paneFiles() {
 				<button class="b" data-a="filereload">Recargar</button>
 				${f.kind === 'toml' ? `<button class="b" data-a="repair">Reparar duplicados</button>` : ''}
 			</div>`}
-		</div>
-	</section>`
+		</div>`
+	return embedded ? inner : `<section class="pane grow"><h2>Archivos de configuracion</h2>${inner}</section>`
 }
 
 /* ═════════════════════════════════════════════ panel: chat */
 
-function paneChat(p) {
+function paneChat(p, embedded = false) {
 	const cat = S.cats[p.id]
 	const m = curModel(p)
 	if (!m) {
-		return `<section class="pane grow">
-			<h2>Chat de prueba</h2>
-			<div class="in"><div class="blank"><b>Carga los modelos primero</b>
-				Usa la tabla de la izquierda para cargar los modelos.</div></div>
-		</section>`
+		const emptyHtml = `<div class="in"><div class="blank"><b>Carga los modelos primero</b>
+			Usa la tabla de la izquierda para cargar los modelos.</div></div>`
+		return embedded ? emptyHtml : `<section class="pane grow"><h2>Chat de prueba</h2>${emptyHtml}</section>`
 	}
 	const msgs = S.chatMessages?.[p.id + ':' + m] || []
 	const isSending = S.chatSending?.[p.id + ':' + m]
@@ -813,20 +810,24 @@ function paneChat(p) {
 	const isTestingEffort = S.effortTesting?.[testKey]
 	const effortResult = S.effortTest?.[testKey]
 
-	return `<section class="pane grow" style="display:flex;flex-direction:column">
-		<h2>Chat de prueba</h2>
-		<div class="in" style="display:flex;flex-direction:column;flex:1;gap:10px">
-			<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;background:#05090f;border:1px solid var(--line2);border-radius:var(--r);flex-wrap:wrap">
-				<div style="display:flex;align-items:center;gap:8px;flex:1;min-width:260px">
-					<span style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--txt2);white-space:nowrap">RAZONAMIENTO:</span>
-					<div style="flex:1;min-width:180px">
-						${sel('effort', 'model_reasoning_effort', p.effort ?? '', '')}
-					</div>
+	const content = `
+		<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 14px;background:#05090f;border-bottom:1px solid var(--line);flex-wrap:wrap">
+			<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+				<span style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)">MODELO EN PRUEBA:</span>
+				<span style="font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--cyan)">${esc(m)}</span>
+			</div>
+			<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+				<span style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)">RAZONAMIENTO:</span>
+				<div style="min-width:180px;max-width:240px">
+					${sel('effort', 'model_reasoning_effort', p.effort ?? '', '')}
 				</div>
 				<button class="b" type="button" data-a="test-effort" data-p="${esc(p.id)}" data-m="${esc(m)}" style="white-space:nowrap;padding:0 12px;height:33px;font-size:11.5px" ${isTestingEffort ? 'disabled' : ''}>
 					${isTestingEffort ? '<span class="blink">Probando...</span>' : 'Probar nivel'}
 				</button>
 			</div>
+		</div>
+
+		<div class="in" style="display:flex;flex-direction:column;flex:1;gap:10px;padding:12px 14px">
 			${effortResult ? `
 				<div class="note ${effortResult.ok ? 'ok' : 'bad'}" style="margin:0;padding:7px 11px;font-size:11.5px">
 					<span class="i">${effortResult.ok ? '✓' : '!'}</span>
@@ -836,7 +837,7 @@ function paneChat(p) {
 				</div>
 			` : ''}
 
-			<div id="chat-log" style="flex:1;min-height:240px;max-height:400px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:10px;background:#04080c;border:1px solid var(--line2);border-radius:var(--r)">
+			<div id="chat-log" style="flex:1;min-height:260px;max-height:420px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:10px;background:#04080c;border:1px solid var(--line2);border-radius:var(--r)">
 				${!msgs.length ? `<p class="hint" style="text-align:center;margin:auto">Escribe un mensaje abajo para probar <b>${esc(m)}</b>${p.effort ? ` con razonamiento <b>${esc(p.effort)}</b>` : ''} en vivo.</p>` : ''}
 				${msgs.map((msg) => `
 					<div style="align-self:${msg.role === 'user' ? 'flex-end' : 'flex-start'};max-width:85%;padding:8px 12px;border-radius:var(--r);background:${msg.role === 'user' ? 'rgba(0,229,255,.1)' : 'var(--pane2)'};border:1px solid ${msg.role === 'user' ? 'var(--cyan)' : 'var(--line)'}">
@@ -861,8 +862,11 @@ function paneChat(p) {
 				}
 				<button class="b" type="button" data-a="chatclear" data-p="${esc(p.id)}" data-m="${esc(m)}" ${isSending ? 'disabled' : ''}>Limpiar</button>
 			</form>
-		</div>
-	</section>`
+		</div>`
+
+	return embedded
+		? content
+		: `<section class="pane grow" style="display:flex;flex-direction:column"><h2>Chat de prueba</h2>${content}</section>`
 }
 
 /* ═════════════════════════════════════════════ panel: modelos */
@@ -958,7 +962,7 @@ function paneModels(p) {
 
 /* ═════════════════════════════════════════════ panel: usar en */
 
-function paneUse(p) {
+function paneUse(p, embedded = false) {
 	const m = curModel(p)
 	const guideKey = `${S.dest}:${m || 'none'}`
 	const g = S.guides[p.id]?.[guideKey] || (S.guides[p.id]?.[S.dest]?.model === m ? S.guides[p.id]?.[S.dest] : null)
@@ -1033,16 +1037,18 @@ function paneUse(p) {
 			<div>${g.notes.map((n) => `<div>${esc(n)}</div>`).join('')}</div></div>` : ''}`
 	}
 
-	return `<section class="pane grow">
-		<h2>Cómo usarlo</h2>
-		<div class="dest">${DESTS.map(([d, t]) =>
+	const inner = `
+		<div class="dest" style="border-bottom:1px solid var(--line);background:#05090f">${DESTS.map(([d, t]) =>
 			`<button data-a="dest" data-d="${d}" aria-pressed="${S.dest === d}">${t}</button>`).join('')}</div>
-		<div class="in">
+		<div class="in" style="padding:14px">
 			${body}
 			${S.dest === 'codex' && m ? fold(p, 'settings', 'Ajustes opcionales de Codex CLI (config.toml)',
 				p.installed ? tag('ok','guardado') : tag('idle','opcional'), () => settingsFormHtml(p)) : ''}
-		</div>
-	</section>`
+		</div>`
+
+	return embedded
+		? inner
+		: `<section class="pane grow"><h2>Cómo usarlo</h2>${inner}</section>`
 }
 
 /* ═════════════════════════════════════════════ formulario */
@@ -1117,21 +1123,23 @@ function render() {
 	$('#grid').innerHTML = `
 		<div class="col">${paneStatus(p)}${paneModels(p)}</div>
 		<div class="col">
-			<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.2);border-radius:var(--r);font-size:11px">
-				<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
-					<span style="font-size:9.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)">PROVEEDOR:</span>
-					<span class="tag ok" style="font-weight:700;font-size:11px;padding:2px 7px">${esc(p.label)}</span>
-					<span style="color:var(--dim);font-weight:700">➔</span>
-					<span style="font-size:9.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)">MODELO:</span>
-					<span class="tag info" style="font-weight:700;font-size:11px;padding:2px 7px">${esc(m || 'sin modelo')}</span>
+			<section class="pane grow" style="display:flex;flex-direction:column;margin-bottom:0">
+				<div style="padding:10px 14px;border-bottom:1px solid var(--line);background:var(--pane2);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+					<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+						<span style="font-size:9.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)">PROVEEDOR:</span>
+						<span class="tag ok" style="font-weight:700;font-size:11px;padding:2px 7px">${esc(p.label)}</span>
+						<span style="color:var(--dim);font-weight:700">➔</span>
+						<span style="font-size:9.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)">MODELO:</span>
+						<span class="tag info" style="font-weight:700;font-size:11px;padding:2px 7px">${esc(m || 'sin modelo')}</span>
+					</div>
+					<div class="dest" style="padding:0;border:0;background:transparent;gap:6px">
+						<button data-a="right" data-d="chat" aria-pressed="${S.right === 'chat'}">Chat de prueba</button>
+						<button data-a="right" data-d="use" aria-pressed="${S.right === 'use'}">Cómo usarlo</button>
+						<button data-a="right" data-d="files" aria-pressed="${S.right === 'files'}">Editar archivos</button>
+					</div>
 				</div>
-			</div>
-			<div class="dest" style="border:1px solid var(--line);border-radius:var(--r);background:var(--pane)">
-				<button data-a="right" data-d="chat" aria-pressed="${S.right === 'chat'}">Chat de prueba</button>
-				<button data-a="right" data-d="use" aria-pressed="${S.right === 'use'}">Como usarlo</button>
-				<button data-a="right" data-d="files" aria-pressed="${S.right === 'files'}">Editar archivos</button>
-			</div>
-			${S.right === 'chat' ? paneChat(p) : S.right === 'use' ? paneUse(p) : paneFiles()}
+				${S.right === 'chat' ? paneChat(p, true) : S.right === 'use' ? paneUse(p, true) : paneFiles(true)}
+			</section>
 		</div>`
 }
 
