@@ -1111,7 +1111,7 @@ function render() {
 		<div class="col">${paneStatus(p)}${paneModels(p)}</div>
 		<div class="col">
 			<section class="pane grow">
-				<h2>${rightTitle}<span class="sp"></span>${m ? tag('info', 'Elegido: ' + m) : tag('idle', 'Sin modelo')}</h2>
+				<h2>${rightTitle}<span class="sp"></span><span class="tag ok" style="margin-right:6px"><span style="margin-right:4px">●</span>${esc(p.label)}</span>${m ? tag('info', 'Elegido: ' + m) : tag('idle', 'Sin modelo')}</h2>
 				<div class="mbar">
 					<div class="chips">
 						<button data-a="right" data-d="chat" aria-pressed="${S.right === 'chat'}">Chat de prueba</button>
