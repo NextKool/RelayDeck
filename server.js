@@ -24,9 +24,14 @@ const { execFileSync } = require('child_process')
 const { createBridge } = require('./bridge')
 const { TomlDoc, validate } = require('./toml-edit')
 
-const PORT = Number(process.env.CODEX_PANEL_PORT || 7788)
+const PORT = Number(process.env.RELAYDECK_PORT || process.env.CODEX_PANEL_PORT || 7788)
 const HOST = '127.0.0.1'
-const PANEL_HOME = process.env.CODEX_PANEL_HOME || path.join(os.homedir(), '.codex-panel')
+const defaultPanelHome = fs.existsSync(path.join(os.homedir(), '.relaydeck'))
+	? path.join(os.homedir(), '.relaydeck')
+	: fs.existsSync(path.join(os.homedir(), '.codex-panel'))
+		? path.join(os.homedir(), '.codex-panel')
+		: path.join(os.homedir(), '.relaydeck')
+const PANEL_HOME = process.env.RELAYDECK_HOME || process.env.CODEX_PANEL_HOME || defaultPanelHome
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
 const STORE = path.join(PANEL_HOME, 'providers.json')
 const ENV_FILE = path.join(PANEL_HOME, 'env.sh')
@@ -34,15 +39,15 @@ const ENV_FILE_CMD = path.join(PANEL_HOME, 'env.cmd')
 const IS_WIN = os.platform() === 'win32'
 const PUBLIC_DIR = path.join(__dirname, 'public')
 // Hay relays que tardan de verdad: 20s se quedaba corto y daba falsos timeouts.
-const TIMEOUT_MS = Number(process.env.CODEX_PANEL_TIMEOUT_MS || 60000)
+const TIMEOUT_MS = Number(process.env.RELAYDECK_TIMEOUT_MS || process.env.CODEX_PANEL_TIMEOUT_MS || 60000)
 // Reintentos ante 429 / 5xx, respetando Retry-After.
-const MAX_RETRIES = Number(process.env.CODEX_PANEL_RETRIES || 2)
+const MAX_RETRIES = Number(process.env.RELAYDECK_RETRIES || process.env.CODEX_PANEL_RETRIES || 2)
 // A partir de aqui avisamos de que el proveedor va lento.
-const SLOW_MS = Number(process.env.CODEX_PANEL_SLOW_MS || 12000)
+const SLOW_MS = Number(process.env.RELAYDECK_SLOW_MS || process.env.CODEX_PANEL_SLOW_MS || 12000)
 // Cuantos modelos probar cuando el usuario no fijo uno.
-const MAX_MODEL_TRIES = Number(process.env.CODEX_PANEL_MODEL_TRIES || 4)
+const MAX_MODEL_TRIES = Number(process.env.RELAYDECK_MODEL_TRIES || process.env.CODEX_PANEL_MODEL_TRIES || 4)
 // Tope de modelos a barrer cuando el test no concluye con los primeros.
-const SCAN_MAX = Number(process.env.CODEX_PANEL_SCAN_MAX || 30)
+const SCAN_MAX = Number(process.env.RELAYDECK_SCAN_MAX || process.env.CODEX_PANEL_SCAN_MAX || 30)
 // Puerto base del traductor Chat->Responses.
 const BRIDGE_BASE_PORT = Number(process.env.CODEX_PANEL_BRIDGE_PORT || 7789)
 

@@ -17,12 +17,13 @@
 ## Arrancar
 
 ```bash
-cd codex-panel
+# Entrar a la carpeta del proyecto
+cd RelayDeck
 node server.js
 # -> http://127.0.0.1:7788
 ```
 
-Otro puerto: `CODEX_PANEL_PORT=9000 node server.js`
+Otro puerto: `RELAYDECK_PORT=9000 node server.js`
 
 ## El panel
 
@@ -221,27 +222,24 @@ Para Claude Code directo, el relay debe implementar el protocolo Anthropic (`/v1
 
 ## Seguridad y almacenamiento de claves
 
-- Las API keys se guardan en **texto plano** en el almacenamiento local del usuario (`~/.codex-panel/providers.json` y `~/.codex-panel/env.sh` / `env.cmd`). En Linux y macOS los archivos quedan con permisos `600` y el directorio con `700`. **En Windows esos permisos no aplican**: `chmod` no tiene efecto real, asi que la proteccion es solo la del perfil de usuario.
+- Las API keys se guardan en **texto plano** en el almacenamiento local del usuario (`~/.relaydeck/providers.json` o `~/.codex-panel/providers.json` por compatibilidad, y `env.sh` / `env.cmd`). En Linux y macOS los archivos quedan con permisos `600` y el directorio con `700`. En Windows esos permisos no aplican de forma POSIX: la protección es la del perfil de usuario del sistema operativo.
 - El panel se ejecuta exclusivamente en local (`127.0.0.1`), valida las cabeceras `Host` y `Origin`, y no envía credenciales a ningún servidor de telemetría o terceros.
-- `GET /api/state` devuelve las keys en claro para poder rellenar el formulario, y el panel **no tiene token de sesion**: cualquier proceso que corra con tu usuario puede leerlas. Es una herramienta local, no un servicio compartido.
-- Un proveedor nuevo se instala con `approval_policy = "on-request"` y `sandbox_mode = "workspace-write"`. Son los valores por defecto del panel, y se pueden dejar en **— no escribir —** para que no toque esas claves.
+- `GET /api/state` devuelve las keys en claro para poder rellenar el formulario, y el panel **no tiene token de sesion**: cualquier proceso que corra con tu usuario local puede leerlas. Es una consola local de desarrollo, no un servicio compartido multiusuario.
+- Un proveedor nuevo se instala con `approval_policy = "on-request"` y `sandbox_mode = "workspace-write"`. Son los valores por defecto recomendados, y se pueden dejar en **— no escribir —** para que no altere tu archivo.
 - Estos relays ven **todos** tus prompts: no los uses con código confidencial ni repositorios con secretos.
 
 ## Variables de entorno del panel
 
-| Variable | Default |
-|---|---|
-| `CODEX_PANEL_PORT` | `7788` |
-| `CODEX_PANEL_HOME` | `~/.codex-panel` |
-| `CODEX_HOME` | `~/.codex` |
-| `CODEX_PANEL_TIMEOUT_MS` | `60000` |
-| `CODEX_PANEL_SLOW_MS` | `12000` |
-| `CODEX_PANEL_RETRIES` | `2` |
-| `CODEX_PANEL_MODEL_TRIES` | `4` |
-| `CODEX_PANEL_SCAN_MAX` | `30` |
-| `CODEX_PANEL_BRIDGE_PORT` | `7789` |
-| `CODEX_PANEL_UNLIMITED_FROM` | `1000000` (saldo desde el que se considera ilimitado) |
-| `CODEX_PANEL_CLI_VERSION` | la de `codex --version` |
+| Variable | Default | Descripción |
+|---|---|---|
+| `RELAYDECK_PORT` / `CODEX_PANEL_PORT` | `7788` | Puerto HTTP del panel en 127.0.0.1 |
+| `RELAYDECK_HOME` / `CODEX_PANEL_HOME` | `~/.relaydeck` | Directorio donde se almacenan proveedores locales |
+| `CODEX_HOME` | `~/.codex` | Directorio de configuración de Codex CLI |
+| `RELAYDECK_TIMEOUT_MS` | `60000` | Tiempo de espera antes de marcar timeout |
+| `RELAYDECK_SLOW_MS` | `12000` | Umbral para alertar de relay lento |
+| `RELAYDECK_RETRIES` | `2` | Reintentos ante errores temporales o 429 |
+| `RELAYDECK_MODEL_TRIES` | `4` | Candidatos a probar automáticamente |
+| `RELAYDECK_SCAN_MAX` | `30` | Tope de modelos a escanear en barrido |
 
 ## Pruebas automatizadas
 
@@ -273,13 +271,12 @@ Registralo con cualquier key que empiece por `sk-`.
 
 | Archivo | Que hace |
 |---|---|
-| `server.js` | el panel: test, descubrimiento de modelos, instalacion, guias |
-| `bridge.js` | el traductor Chat → Responses (usable suelto) |
-| `toml-edit.js` | editor estructural de TOML: lee y edita en su sitio, sin duplicar |
-| `public/index.html` | la interfaz, sin dependencias |
-| `qa/fake-provider.js` | relay falso para probar sin gastar keys |
-| `qa/run-tests.js` | suite completa de pruebas automatizadas |
-| `LICENSE` | licencia de código abierto MIT |
+| `server.js` | El panel: test, descubrimiento de modelos, instalación, guías y backend |
+| `bridge.js` | El traductor Chat → Responses en tiempo real (usable suelto) |
+| `toml-edit.js` | Editor estructural de TOML: lee y edita en su sitio, sin duplicar tablas |
+| `public/index.html` | La interfaz gráfica de usuario en tiempo real (cero dependencias) |
+| `qa/fake-provider.js` | Relay falso para pruebas de integración |
+| `qa/run-tests.js` | Suite completa de pruebas automatizadas (41/41 tests) |
+| `LICENSE` | Licencia de código abierto MIT (NextKool 2026) |
 
-En `~/.codex-panel/` (permisos `600`): `providers.json` (proveedores y keys), `env.sh` / `env.cmd`
-(las keys, por si prefieres cargarlas de un archivo), `installation-id`. **No los subas a git.**
+> **Nota de seguridad sobre tus claves:** En tu carpeta local de usuario (`~/.relaydeck/`) se guardan `providers.json` y `env.cmd` con tus API keys reales para que el panel las recuerde entre sesiones. **Nunca compartas ni subas esos archivos a GitHub**, ya que contienen tus claves de pago privadas. El `.gitignore` del proyecto los protege por defecto.
