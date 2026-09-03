@@ -20,7 +20,7 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 const crypto = require('crypto')
-const { execFileSync } = require('child_process')
+const { execFileSync, spawn } = require('child_process')
 const { createBridge } = require('./bridge')
 const { TomlDoc, validate } = require('./toml-edit')
 
@@ -3130,10 +3130,25 @@ const server = http.createServer(async (req, res) => {
 	}
 })
 
+function openBrowser(url) {
+	if (process.env.RELAYDECK_NO_OPEN || process.env.CODEX_PANEL_NO_OPEN || process.env.CI || process.env.NODE_ENV === 'test') return
+	try {
+		const plat = os.platform()
+		if (plat === 'win32') {
+			spawn('cmd.exe', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref()
+		} else if (plat === 'darwin') {
+			spawn('open', [url], { detached: true, stdio: 'ignore' }).unref()
+		} else {
+			spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref()
+		}
+	} catch {}
+}
+
 ensureHome()
 server.listen(PORT, HOST, () => {
 	console.log(`
-  Codex Panel   http://${HOST}:${PORT}`)
+  RelayDeck     http://${HOST}:${PORT}`)
 	console.log(`  Almacen       ${PANEL_HOME}`)
 	console.log(`  Codex home    ${CODEX_HOME}\n`)
+	openBrowser(`http://${HOST}:${PORT}`)
 })
