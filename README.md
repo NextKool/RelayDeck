@@ -3,6 +3,10 @@
 > **Consola local de mandos para probar, diagnosticar y conmutar APIs de IA en Codex CLI y Claude Code.**  
 > *Desarrollado por NextKool — 2026.*
 
+<p align="center">
+  <img src="preview.png" alt="RelayDeck Dashboard" width="100%" />
+</p>
+
 ---
 
 **RelayDeck** resuelve el problema de conectar múltiples proveedores de IA (OpenAI, Anthropic, DeepSeek, Qwen, relays y gateways) con tus terminales de desarrollo:
