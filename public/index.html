@@ -48,7 +48,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
 .tabs button .dot.bad{background:var(--mag)}
 
 .grid{flex:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;
-	padding:14px 20px 20px;align-items:start}
+	padding:14px 20px 54px;align-items:start}
 .col{display:flex;flex-direction:column;gap:14px;padding-right:2px}
 
 .pane{background:var(--pane);border:1px solid var(--line);border-radius:var(--r)}
@@ -182,7 +182,7 @@ pre.j .k2{color:var(--cyan)}
 .fold>button .ar{color:var(--cyan);font-size:8px;transition:transform .15s}
 .fold.on>button .ar{transform:rotate(90deg)}
 .fold>button .sp{margin-left:auto}
-.fold>.c{display:none;padding:0 14px 14px}
+.fold>.c{display:none;padding:0 14px 22px}
 .fold.on>.c{display:block}
 
 ul.ck{list-style:none;margin:0;padding:0}
@@ -216,6 +216,7 @@ select option{background:#080d14;color:#c9d8e8;padding:8px 12px;font-family:var(
 .c-select.open .c-select-arrow{transform:rotate(180deg);stroke:var(--cyan)}
 .c-select-menu{position:absolute;top:calc(100% + 4px);left:0;right:0;max-height:220px;overflow-y:auto;z-index:99;
 	background:#080d14;border:1px solid var(--line2);border-radius:var(--r);box-shadow:0 8px 24px rgba(0,0,0,.7),var(--gc);padding:4px 0}
+.c-select.dropup .c-select-menu{top:auto;bottom:calc(100% + 4px);box-shadow:0 -8px 24px rgba(0,0,0,.7),var(--gc)}
 .c-select-item{display:flex;align-items:center;justify-content:space-between;padding:7px 11px;font-size:12px;color:var(--txt2);cursor:pointer;transition:background .12s,color .12s}
 .c-select-item:hover{background:rgba(0,229,255,.08);color:#fff}
 .c-select-item.active{background:rgba(0,229,255,.14);color:var(--cyan);font-weight:600}
@@ -281,7 +282,7 @@ select option{background:#080d14;color:#c9d8e8;padding:8px 12px;font-family:var(
 
 	<div class="grid" id="grid"></div>
 
-	<footer style="padding:12px 20px;text-align:center;font-size:10.5px;color:var(--dim);border-top:1px solid var(--line);background:#03060a;margin-top:auto">
+	<footer style="padding:16px 20px;text-align:center;font-size:10.5px;color:var(--dim);border-top:1px solid var(--line);background:#03060a;margin-top:36px">
 		<span>RELAY//DECK v1.0 &copy; 2026 NextKool. Todos los derechos reservados.</span>
 	</footer>
 </div>
@@ -1470,10 +1471,16 @@ document.addEventListener('click', async (e) => {
 		const isOpen = selBox.classList.contains('open')
 		$$('.c-select').forEach((cs) => {
 			cs.classList.remove('open')
+			cs.classList.remove('dropup')
 			const m = cs.querySelector('.c-select-menu')
 			if (m) m.hidden = true
 		})
 		if (!isOpen) {
+			const rect = selBox.getBoundingClientRect()
+			const spaceBelow = window.innerHeight - rect.bottom
+			if (spaceBelow < 230 && rect.top > 210) {
+				selBox.classList.add('dropup')
+			}
 			selBox.classList.add('open')
 			menu.hidden = false
 		}
