@@ -196,34 +196,30 @@ ul.ck .d2{margin-top:1px;font-size:11px;color:var(--txt2);word-break:break-word}
 ul.ck .ms{font-size:10px;color:var(--dim)}
 
 /* ══════════════════════════════════════ formulario */
-label.l{display:block;margin-bottom:5px;font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt2)}
+label.l{display:block;margin-bottom:6px;font-size:10px;line-height:1.2;letter-spacing:.13em;text-transform:uppercase;color:var(--txt2)}
 label.l s{color:var(--dim);text-decoration:none;letter-spacing:0;text-transform:none}
-input[type=text],input[type=password],input[type=search],select{width:100%;min-height:33px;padding:0 10px;
+input[type=text],input[type=password],input[type=search],select,.c-select-btn{box-sizing:border-box;height:33px;min-height:33px;width:100%;padding:0 10px;
 	font:400 13px var(--mono);color:var(--txt);background:#04080c;border:1px solid var(--line2);border-radius:var(--r)}
-input:focus,select:focus{outline:none;border-color:var(--cyan);box-shadow:var(--gc)}
+input:focus,select:focus,.c-select-btn:hover,.c-select.open .c-select-btn{outline:none;border-color:var(--cyan);box-shadow:var(--gc)}
 input::placeholder{color:var(--dim)}
 select{appearance:none;-webkit-appearance:none;-moz-appearance:none;
 	background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2300e5ff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 	background-repeat:no-repeat;background-position:right 10px center;padding-right:30px;cursor:pointer}
 select option{background:#080d14;color:#c9d8e8;padding:8px 12px;font-family:var(--mono)}
 .c-select{position:relative;width:100%}
-.c-select-btn{width:100%;min-height:33px;padding:0 10px;display:flex;align-items:center;justify-content:space-between;
-	font:400 13px var(--mono);color:var(--txt);background:#04080c;border:1px solid var(--line2);border-radius:var(--r);
-	cursor:pointer;transition:border-color .15s,box-shadow .15s;text-align:left}
-.c-select-btn:hover,.c-select.open .c-select-btn{border-color:var(--cyan);box-shadow:var(--gc);outline:none}
+.c-select-btn{display:flex;align-items:center;justify-content:space-between;cursor:pointer;transition:border-color .15s,box-shadow .15s;text-align:left}
 .c-select-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px}
 .c-select-arrow{width:12px;height:12px;flex:none;fill:none;stroke:var(--dim);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;transition:transform .15s,stroke .15s}
 .c-select.open .c-select-arrow{transform:rotate(180deg);stroke:var(--cyan)}
 .c-select-menu{position:absolute;top:calc(100% + 4px);left:0;right:0;max-height:220px;overflow-y:auto;z-index:99;
 	background:#080d14;border:1px solid var(--line2);border-radius:var(--r);box-shadow:0 8px 24px rgba(0,0,0,.7),var(--gc);padding:4px 0}
-.c-select.dropup .c-select-menu{top:auto;bottom:calc(100% + 4px);box-shadow:0 -8px 24px rgba(0,0,0,.7),var(--gc)}
 .c-select-item{display:flex;align-items:center;justify-content:space-between;padding:7px 11px;font-size:12px;color:var(--txt2);cursor:pointer;transition:background .12s,color .12s}
 .c-select-item:hover{background:rgba(0,229,255,.08);color:#fff}
 .c-select-item.active{background:rgba(0,229,255,.14);color:var(--cyan);font-weight:600}
 .c-select-rec{font-size:9.5px;color:var(--amber);margin-left:auto;padding-left:8px;letter-spacing:.05em}
 .c-select-check{color:var(--cyan);margin-left:6px;font-weight:700}
 .f{margin-bottom:12px}
-.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
 .ck2{display:flex;gap:9px;align-items:flex-start}
 .ck2 input{flex:none;width:15px;height:15px;margin:2px 0 0;accent-color:var(--cyan);cursor:pointer}
 .ck2 label{margin:0;font-size:12px;cursor:pointer}
@@ -712,24 +708,13 @@ function planView() {
 
 const LABELS = {
 	'': '— no escribir (deja lo que haya) —',
-	minimal: 'minimal (razonamiento mínimo)',
-	low: 'low (razonamiento bajo)',
-	medium: 'medium (razonamiento medio)',
-	high: 'high (razonamiento alto)',
-	xhigh: 'xhigh (razonamiento extremo - solo o3)',
+	minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh',
 	untrusted: 'untrusted — pregunta casi todo',
 	'on-request': 'on-request — pregunta cuando hace falta',
 	never: 'never — no pregunta nunca',
 	'read-only': 'read-only — solo lectura',
 	'workspace-write': 'workspace-write — escribe en el proyecto',
 	'danger-full-access': 'danger-full-access — sin limites',
-}
-
-function isReasoningModel(m) {
-	if (!m) return true
-	const s = String(m).toLowerCase()
-	return /^(o1|o3|o4|deepseek-r1|deepseek-reasoner|qwq)/.test(s) ||
-		/(^|[-_/])(o1|o3|o4|r1|reasoner|reasoning|thinking)([-_/]|$)/.test(s)
 }
 
 function sel(name, key, value, help, recommendedVal) {
@@ -760,26 +745,11 @@ function sel(name, key, value, help, recommendedVal) {
 }
 
 function settingsFormHtml(p) {
-	const m = curModel(p)
-	const isReasoning = isReasoningModel(m)
-	const effortHtml = isReasoning
-		? sel('effort', 'model_reasoning_effort', p.effort ?? '', 'Nivel de razonamiento', 'high')
-		: `<div class="f"><label class="l" for="s-effort">Nivel de razonamiento <span style="color:var(--dim);font-size:9.5px;text-transform:none">(Incompatible con ${esc(m)})</span></label>
-			<input type="hidden" id="s-effort" name="effort" value="" />
-			<div class="c-select" style="opacity:.5;cursor:not-allowed">
-				<button type="button" class="c-select-btn" disabled style="cursor:not-allowed">
-					<span class="c-select-label">No disponible para "${esc(m)}"</span>
-					<svg class="c-select-arrow" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
-				</button>
-			</div>
-			<p class="hint" style="font-size:10.5px;margin-top:4px;color:var(--dim)">🔒 Solo aplica a modelos o1, o3, R1 o thinking. Se desactiva para evitar error HTTP 400 en Codex.</p>
-		</div>`
-
 	return `<div style="margin-top:8px">
 		<p class="hint" style="margin-bottom:12px">Estos ajustes aplican únicamente a <b>Codex CLI</b> y se guardan en <code>config.toml</code>. Claude Code no los usa y requiere que el relay sea compatible con el protocolo Anthropic.</p>
 		<form data-a="savecfg" data-p="${esc(p.id)}">
 			<div class="g2">
-				${effortHtml}
+				${sel('effort', 'model_reasoning_effort', p.effort ?? '', 'Nivel de razonamiento')}
 				${sel('approvalPolicy', 'approval_policy', p.approvalPolicy ?? '', 'Aprobaciones')}
 			</div>
 			<div class="g2">
@@ -1497,16 +1467,10 @@ document.addEventListener('click', async (e) => {
 		const isOpen = selBox.classList.contains('open')
 		$$('.c-select').forEach((cs) => {
 			cs.classList.remove('open')
-			cs.classList.remove('dropup')
 			const m = cs.querySelector('.c-select-menu')
 			if (m) m.hidden = true
 		})
 		if (!isOpen) {
-			const rect = selBox.getBoundingClientRect()
-			const spaceBelow = window.innerHeight - rect.bottom
-			if (spaceBelow < 230 && rect.top > 210) {
-				selBox.classList.add('dropup')
-			}
 			selBox.classList.add('open')
 			menu.hidden = false
 		}
