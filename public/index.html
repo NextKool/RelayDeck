@@ -336,6 +336,18 @@ function protocolLabel(r) {
 	return { responses:'Responses', anthropic:'Anthropic', chat:'Chat Completions' }[resultProtocol(r)] || ''
 }
 
+function maskKey(key) {
+	const k = String(key || '').trim()
+	if (!k) return ''
+	if (k.length <= 11) return k.slice(0, 3) + '************' + k.slice(-2)
+	return k.slice(0, 7) + '************' + k.slice(-4)
+}
+
+function maskKeyInText(text, key) {
+	if (!text || !key || key.length < 8) return text
+	return String(text).split(key).join(maskKey(key))
+}
+
 function resultHtml(r) {
 	const protocol = protocolLabel(r)
 	if (r.ok) {
@@ -948,13 +960,23 @@ function paneUse(p) {
 		${isConfiguredWithThisModel ? `<div class="note ok" style="margin-bottom:12px"><span class="i">✓</span><div><strong>Modelo activo en config.toml:</strong> <code>${esc(m)}</code></div></div>` : ''}
 		<ol class="gsteps">${g.steps.map((st) => `<li>
 			<div class="h">${esc(st.title)}</div>
-			${st.cmds ? st.cmds.map((c) => `<div class="cmd"><code>${esc(c)}</code>
-				<button class="b xs" data-a="copy" data-t="${esc(c)}">Copiar</button></div>`).join('') : ''}
+			${st.cmds ? st.cmds.map((c) => {
+				const raw = typeof c === 'string' ? c : c.cmd
+				const key = S.keys[p.id] || p.apiKey || ''
+				const disp = maskKeyInText(raw, key)
+				return `<div class="cmd"><code>${esc(disp)}</code>
+					<button class="b xs" data-a="copy" data-t="${esc(raw)}">Copiar</button></div>`
+			}).join('') : ''}
 			${st.file ? `<div class="f">Archivo: ${esc(st.file)}</div>` : ''}
-			${st.json ? `<pre class="j">${esc(st.json)}</pre>
-				<div class="row" style="margin-top:6px">
-				<button class="b xs" data-a="copy" data-t="${esc(st.json)}">Copiar JSON</button>
-				${g.supported !== false ? `<button class="b xs go" data-a="applyclaude" data-p="${esc(p.id)}">Escribirlo por mi</button>` : ''}</div>` : ''}
+			${st.json ? (() => {
+				const rawJson = st.json
+				const key = S.keys[p.id] || p.apiKey || ''
+				const dispJson = maskKeyInText(rawJson, key)
+				return `<pre class="j">${esc(dispJson)}</pre>
+					<div class="row" style="margin-top:6px">
+					<button class="b xs" data-a="copy" data-t="${esc(rawJson)}">Copiar JSON</button>
+					${g.supported !== false ? `<button class="b xs go" data-a="applyclaude" data-p="${esc(p.id)}">Escribirlo por mi</button>` : ''}</div>`
+			})() : ''}
 			${st.detail ? `<div class="d">${esc(st.detail)}</div>` : ''}
 		</li>`).join('')}</ol>
 		${g.notes?.length ? `<div class="note" style="margin-top:13px"><span class="i">!</span>
@@ -978,6 +1000,7 @@ function paneUse(p) {
 function formHtml(p) {
 	const v = (k) => esc(p ? p[k] ?? '' : '')
 	const apiKey = p?.apiKey ?? ''
+	const hasKey = Boolean(apiKey)
 	return `<form data-a="save" data-p="${p ? esc(p.id) : 'new'}" autocomplete="off">
 		<div class="g2">
 			<div class="f"><label class="l" for="q-l">Nombre</label>
@@ -986,8 +1009,12 @@ function formHtml(p) {
 				<input id="q-u" name="baseUrl" type="text" value="${v('baseUrl')}" placeholder="https://relay.tld/v1" required /></div>
 		</div>
 		<div class="f"><label class="l" for="q-k">API key</label>
-			<input id="q-k" name="apiKey" type="text" value="${esc(apiKey)}"
-				placeholder="sk-..." spellcheck="false" /></div>
+			<div style="position:relative;display:flex;align-items:center">
+				<input id="q-k" name="apiKey" type="text" value="${esc(hasKey ? maskKey(apiKey) : '')}"
+					data-real="${esc(apiKey)}" placeholder="sk-..." spellcheck="false" style="padding-right:${hasKey ? '80px' : '10px'}" />
+				${hasKey ? `<button type="button" class="b xs" data-a="toggle-key" data-target="q-k" style="position:absolute;right:6px">Mostrar</button>` : ''}
+			</div>
+		</div>
 		<p class="hint" style="margin-bottom:12px">El nivel de razonamiento, aprobaciones, sandbox y protocolo se configuran en la pestaña de <b>Codex CLI</b>.</p>
 		<div class="row">
 			<button class="b go" type="submit">${p ? 'Guardar' : 'Agregar y probar'}</button>
@@ -1377,6 +1404,21 @@ document.addEventListener('click', async (e) => {
 	if (e.target.id === 'modal' || a === 'closemodal') {
 		return closeModal()
 	}
+	if (a === 'toggle-key') {
+		const targetId = el.dataset.target
+		const input = $('#' + targetId)
+		if (!input) return
+		const real = input.dataset.real || ''
+		if (!real) return
+		if (input.value === real) {
+			input.value = maskKey(real)
+			el.textContent = 'Mostrar'
+		} else {
+			input.value = real
+			el.textContent = 'Ocultar'
+		}
+		return
+	}
 	if (a === 'showallstatus') {
 		return openAllStatusGuide()
 	}
@@ -1653,11 +1695,17 @@ document.addEventListener('submit', async (e) => {
 	btn.innerHTML = `<span class="blink">●</span> ${isNew ? 'Agregando...' : 'Guardando...'}`
 	try {
 		const g = (n) => form.querySelector(`[name=${n}]`)
+		const keyInput = g('apiKey')
+		let apiKeyVal = keyInput?.value?.trim() || ''
+		const realKey = keyInput?.dataset?.real || ''
+		if (realKey && (apiKeyVal === maskKey(realKey) || !apiKeyVal)) {
+			apiKeyVal = realKey
+		}
 		const payload = {
 			id: isNew ? null : pid,
 			label: g('label')?.value?.trim() || '',
 			baseUrl: g('baseUrl')?.value?.trim() || '',
-			apiKey: g('apiKey')?.value?.trim() || '',
+			apiKey: apiKeyVal,
 			useBridge: Boolean(g('useBridge')?.checked),
 		}
 		const r = await api('/api/provider', payload)

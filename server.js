@@ -177,9 +177,10 @@ function cmdSet(name, value) {
 }
 
 function maskKey(key) {
-	const k = String(key || '')
-	if (k.length <= 12) return k ? k.slice(0, 3) + '***' : ''
-	return k.slice(0, 7) + '…' + k.slice(-4)
+	const k = String(key || '').trim()
+	if (!k) return ''
+	if (k.length <= 11) return k.slice(0, 3) + '************' + k.slice(-2)
+	return k.slice(0, 7) + '************' + k.slice(-4)
 }
 
 function stamp() {
