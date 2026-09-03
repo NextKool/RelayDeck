@@ -202,6 +202,25 @@ input[type=text],input[type=password],input[type=search],select{width:100%;min-h
 	font:400 13px var(--mono);color:var(--txt);background:#04080c;border:1px solid var(--line2);border-radius:var(--r)}
 input:focus,select:focus{outline:none;border-color:var(--cyan);box-shadow:var(--gc)}
 input::placeholder{color:var(--dim)}
+select{appearance:none;-webkit-appearance:none;-moz-appearance:none;
+	background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2300e5ff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+	background-repeat:no-repeat;background-position:right 10px center;padding-right:30px;cursor:pointer}
+select option{background:#080d14;color:#c9d8e8;padding:8px 12px;font-family:var(--mono)}
+.c-select{position:relative;width:100%}
+.c-select-btn{width:100%;min-height:33px;padding:0 10px;display:flex;align-items:center;justify-content:space-between;
+	font:400 13px var(--mono);color:var(--txt);background:#04080c;border:1px solid var(--line2);border-radius:var(--r);
+	cursor:pointer;transition:border-color .15s,box-shadow .15s;text-align:left}
+.c-select-btn:hover,.c-select.open .c-select-btn{border-color:var(--cyan);box-shadow:var(--gc);outline:none}
+.c-select-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px}
+.c-select-arrow{width:12px;height:12px;flex:none;fill:none;stroke:var(--dim);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;transition:transform .15s,stroke .15s}
+.c-select.open .c-select-arrow{transform:rotate(180deg);stroke:var(--cyan)}
+.c-select-menu{position:absolute;top:calc(100% + 4px);left:0;right:0;max-height:220px;overflow-y:auto;z-index:99;
+	background:#080d14;border:1px solid var(--line2);border-radius:var(--r);box-shadow:0 8px 24px rgba(0,0,0,.7),var(--gc);padding:4px 0}
+.c-select-item{display:flex;align-items:center;justify-content:space-between;padding:7px 11px;font-size:12px;color:var(--txt2);cursor:pointer;transition:background .12s,color .12s}
+.c-select-item:hover{background:rgba(0,229,255,.08);color:#fff}
+.c-select-item.active{background:rgba(0,229,255,.14);color:var(--cyan);font-weight:600}
+.c-select-rec{font-size:9.5px;color:var(--amber);margin-left:auto;padding-left:8px;letter-spacing:.05em}
+.c-select-check{color:var(--cyan);margin-left:6px;font-weight:700}
 .f{margin-bottom:12px}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .ck2{display:flex;gap:9px;align-items:flex-start}
@@ -310,6 +329,7 @@ const S = {
 }
 
 const $ = (s, r = document) => r.querySelector(s)
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s))
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) =>
 	({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]))
 const cur = () => S.list.find((p) => p.id === S.sel) || null
@@ -702,12 +722,29 @@ const LABELS = {
 
 function sel(name, key, value, help, recommendedVal) {
 	const list = S.opts[key] || []
+	const curVal = value ?? ''
+	const curLabel = LABELS[curVal] ?? (curVal || '— no escribir (deja lo que haya) —')
 	return `<div class="f"><label class="l" for="s-${name}">${esc(help)}</label>
-		<select id="s-${name}" name="${name}">${list.map((o) => {
-			const label = esc(LABELS[o] ?? o)
-			const isRec = o === recommendedVal
-			return `<option value="${esc(o)}" ${o === value ? 'selected' : ''}>${label}${isRec ? ' ★ (RECOMENDADO)' : ''}</option>`
-		}).join('')}</select></div>`
+		<input type="hidden" id="s-${name}" name="${name}" value="${esc(curVal)}" />
+		<div class="c-select" data-name="${name}">
+			<button type="button" class="c-select-btn" data-a="open-c-select" data-name="${name}">
+				<span class="c-select-label" id="c-lbl-${name}">${esc(curLabel)}</span>
+				<svg class="c-select-arrow" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
+			</button>
+			<div class="c-select-menu" id="c-menu-${name}" hidden>
+				${list.map((o) => {
+					const label = esc(LABELS[o] ?? o)
+					const isRec = o === recommendedVal
+					const isAct = o === curVal
+					return `<div class="c-select-item ${isAct ? 'active' : ''}" data-a="pick-c-select" data-name="${name}" data-val="${esc(o)}" data-label="${label}">
+						<span>${label}</span>
+						${isRec ? `<span class="c-select-rec">★ RECOMENDADO</span>` : ''}
+						${isAct ? `<span class="c-select-check">✓</span>` : ''}
+					</div>`
+				}).join('')}
+			</div>
+		</div>
+	</div>`
 }
 
 function settingsFormHtml(p) {
@@ -1261,6 +1298,13 @@ function startScan(id, models) {
 
 document.addEventListener('click', async (e) => {
 	if (e.target.closest('#modal') && !e.target.closest('.box')) return closeModal()
+	if (!e.target.closest('.c-select')) {
+		$$('.c-select').forEach((cs) => {
+			cs.classList.remove('open')
+			const m = cs.querySelector('.c-select-menu')
+			if (m) m.hidden = true
+		})
+	}
 	const el = e.target.closest('[data-a]')
 	if (!el || el.tagName === 'FORM' || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return
 	const { a, p: pid, m, k, f, d, t } = el.dataset
@@ -1417,6 +1461,45 @@ document.addEventListener('click', async (e) => {
 			input.value = real
 			el.textContent = 'Ocultar'
 		}
+		return
+	}
+	if (a === 'open-c-select') {
+		const selBox = el.closest('.c-select')
+		const menu = selBox?.querySelector('.c-select-menu')
+		if (!menu) return
+		const isOpen = selBox.classList.contains('open')
+		$$('.c-select').forEach((cs) => {
+			cs.classList.remove('open')
+			const m = cs.querySelector('.c-select-menu')
+			if (m) m.hidden = true
+		})
+		if (!isOpen) {
+			selBox.classList.add('open')
+			menu.hidden = false
+		}
+		return
+	}
+	if (a === 'pick-c-select') {
+		const selBox = el.closest('.c-select')
+		const val = el.dataset.val ?? ''
+		const name = el.dataset.name
+		const label = el.dataset.label ?? (LABELS[val] ?? val)
+		const hiddenInput = $(`#s-${name}`)
+		if (hiddenInput) hiddenInput.value = val
+		const labelEl = $(`#c-lbl-${name}`)
+		if (labelEl) labelEl.textContent = label
+		selBox?.querySelectorAll('.c-select-item').forEach((it) => {
+			const isMatch = it.dataset.val === val
+			it.classList.toggle('active', isMatch)
+			const chk = it.querySelector('.c-select-check')
+			if (chk) chk.remove()
+			if (isMatch) {
+				it.insertAdjacentHTML('beforeend', '<span class="c-select-check">✓</span>')
+			}
+		})
+		if (selBox) selBox.classList.remove('open')
+		const menu = selBox?.querySelector('.c-select-menu')
+		if (menu) menu.hidden = true
 		return
 	}
 	if (a === 'showallstatus') {
