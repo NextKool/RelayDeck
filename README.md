@@ -285,6 +285,7 @@ Registralo con cualquier key que empiece por `sk-`.
 | `public/index.html` | La interfaz gráfica de usuario en tiempo real (cero dependencias) |
 | `qa/fake-provider.js` | Relay falso para pruebas de integración |
 | `qa/run-tests.js` | Suite completa de pruebas automatizadas (44/44 tests) |
+| `PROVEEDORES.md` | Lista de proveedores compatibles verificados y créditos de prueba |
 | `LICENSE` | Licencia de código abierto GNU GPLv3 (NextKool 2026) |
 
 > **Nota de seguridad sobre tus claves:** En tu carpeta local de usuario (`~/.relaydeck/`) se guardan `providers.json` y `env.cmd` con tus API keys reales para que el panel las recuerde entre sesiones. **Nunca compartas ni subas esos archivos a GitHub**, ya que contienen tus claves de pago privadas. El `.gitignore` del proyecto los protege por defecto.
