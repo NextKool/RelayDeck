@@ -66,6 +66,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
 .verdict{display:flex;align-items:center;gap:13px;margin-bottom:14px}
 .verdict .big{font:700 19px/1 var(--mono);letter-spacing:.02em}
 .verdict.ok .big{color:var(--lime);text-shadow:var(--gl)}
+.verdict.info .big{color:var(--cyan);text-shadow:var(--gc)}
 .verdict.warn .big{color:var(--amber)}
 .verdict.bad .big{color:var(--mag);text-shadow:var(--gm)}
 .verdict.idle .big{color:var(--dim)}
@@ -244,8 +245,8 @@ select option{background:#080d14;color:#c9d8e8;padding:8px 12px;font-family:var(
 	font:700 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--cyan)}
 #modal .box>.in{padding:15px;max-height:70vh;overflow-y:auto}
 
-.blink{display:inline-block;animation:bl .75s infinite alternate}
-@keyframes bl{0%{opacity:.2;transform:scale(.85)}100%{opacity:1;transform:scale(1.2)}}
+.blink{display:inline-block;animation:bl .8s ease-in-out infinite alternate}
+@keyframes bl{0%{opacity:.2}100%{opacity:1}}
 
 @media (max-width:1000px){
 	.grid{grid-template-columns:1fr}
@@ -292,17 +293,17 @@ select option{background:#080d14;color:#c9d8e8;padding:8px 12px;font-family:var(
 /* ═════════════════════════════════════════════ constantes */
 
 const VERD = {
-	codex_ready:     { cls:'ok',   big:'FUNCIONA',        why:'Responde a la API que usa Codex.' },
-	chat_only:       { cls:'warn', big:'SOLO CHAT',       why:'Necesita el traductor para Codex. Claude Code directo requiere que el relay implemente el protocolo Anthropic (/messages).' },
-	no_responses:    { cls:'warn', big:'SOLO CHAT',       why:'No implementa Responses. Codex necesita el traductor; Claude Code directo solo funciona si tambien ofrece Anthropic (/messages).' },
-	claude_only:     { cls:'info', big:'SOLO CLAUDE',      why:'Responde a Anthropic Messages (/v1/messages). Sirve directamente en Claude Code, no en Codex.' },
-	client_blocked:  { cls:'warn', big:'BLOQUEA AL PANEL',why:'El relay rechaza al panel, no a tu key. Puede funcionarte igual.' },
-	no_channel:      { cls:'warn', big:'MODELO SIN CANAL',why:'Tu key sirve. Elegi otro modelo en el panel de al lado.' },
-	quota_exhausted: { cls:'warn', big:'CUOTA AGOTADA',   why:'Tu key sirve, pero ese modelo no tiene saldo.' },
-	invalid_key:     { cls:'bad',  big:'KEY INVALIDA',    why:'La rechaza en los endpoints reales. Esta revocada o agotada.' },
-	unreachable:     { cls:'bad',  big:'NO RESPONDE',     why:'No se pudo conectar. Revisa la URL.' },
-	dead:            { cls:'bad',  big:'NO SIRVE',        why:'Responde, pero no de forma usable.' },
-	unknown:         { cls:'idle', big:'INCOMPLETO',      why:'Faltan datos para decidir.' },
+	codex_ready:     { cls:'ok',   big:'RESPONSES (DIRECTO)',  why:'Conexión directa y autónoma. Soporta Responses nativo sin requerir el servidor Node.' },
+	chat_only:       { cls:'warn', big:'PUENTE LOCAL (CHAT)',  why:'Conexión mediante traductor local. El relay usa Chat Completions y requiere mantener Node activo para Codex.' },
+	no_responses:    { cls:'warn', big:'PUENTE LOCAL (CHAT)',  why:'Conexión mediante traductor local. El relay usa Chat Completions y requiere mantener Node activo para Codex.' },
+	claude_only:     { cls:'info', big:'ANTHROPIC DIRECTO',    why:'Conexión directa nativa con Claude Code (/v1/messages).' },
+	client_blocked:  { cls:'warn', big:'BLOQUEA AL PANEL',     why:'El relay rechaza la firma del panel, pero puede responder a peticiones directas.' },
+	no_channel:      { cls:'warn', big:'MODELO SIN CANAL',     why:'Tu clave es válida. Elige otro modelo disponible en el panel lateral.' },
+	quota_exhausted: { cls:'warn', big:'CUOTA AGOTADA',        why:'Tu key es válida, pero ese modelo específico no tiene saldo.' },
+	invalid_key:     { cls:'bad',  big:'KEY INVÁLIDA',         why:'Rechazada por el proveedor. Clave revocada o inexistente.' },
+	unreachable:     { cls:'bad',  big:'SIN CONEXIÓN',         why:'No se pudo conectar con el relay. Verifica la URL.' },
+	dead:            { cls:'bad',  big:'INACCESIBLE',          why:'El servidor responde con errores críticos o formato inválido.' },
+	unknown:         { cls:'idle', big:'SIN VERIFICAR',        why:'Faltan datos de prueba para determinar el estado.' },
 }
 const MK = { pass:'✓', warn:'!', fail:'✕', ok:'✓', unsupported:'–' }
 const CKO = ['reachable','client','auth','models','modelSupport','responses','modelScan',
@@ -329,8 +330,16 @@ const $ = (s, r = document) => r.querySelector(s)
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s))
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) =>
 	({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]))
+const normUrl = (u) => String(u || '').toLowerCase().replace(/^https?:\/\//i, '').replace(/\/v1\/?$/i, '').replace(/\/+$/, '')
 const cur = () => S.list.find((p) => p.id === S.sel) || null
-const curModel = (p) => S.selectedModel?.[p.id] || p.model || S.cats[p.id]?.models?.[0] || ''
+const curModel = (p) => {
+	if (S.selectedModel?.[p?.id]) return S.selectedModel[p.id]
+	if (p?.installed && p.model) return p.model
+	if (S.claude?.exists && normUrl(p?.baseUrl) === normUrl(S.claude?.baseUrl)) {
+		return S.claude.model || S.claude.opusModel || S.claude.sonnetModel || ''
+	}
+	return ''
+}
 const tag = (c, t) => `<span class="tag ${c}">${esc(t)}</span>`
 const money = (v) => (typeof v === 'number' && !Number.isNaN(v) ? '$' + v.toFixed(2) : null)
 
@@ -397,11 +406,34 @@ async function api(path, body, signal) {
 }
 
 function modal(title, html) {
-	$('#modal-t').textContent = title
+	$('#modal-t').innerHTML = `<span>${esc(title)}</span><button type="button" class="b xs" data-a="closemodal" style="padding:0 8px;min-height:22px;line-height:1;margin-left:auto">✕</button>`
 	$('#modal-c').innerHTML = html
 	$('#modal').classList.add('show')
 }
-function closeModal() { $('#modal').classList.remove('show') }
+function closeModal() {
+	$('#modal').classList.remove('show')
+	if (window._modalResolve) {
+		const res = window._modalResolve
+		window._modalResolve = null
+		res(false)
+	}
+}
+
+function confirmModal(title, messageHtml, { confirmText = 'Aceptar', cancelText = 'Cancelar', danger = false } = {}) {
+	return new Promise((resolve) => {
+		window._modalResolve = resolve
+		const contentHtml = `
+			<div style="font-size:12.5px;line-height:1.6;color:var(--txt)">
+				<div style="margin-bottom:18px">${messageHtml}</div>
+				<div class="row" style="justify-content:flex-end;gap:10px">
+					<button type="button" class="b" data-a="modal-cancel">${esc(cancelText)}</button>
+					<button type="button" class="b ${danger ? 'bad' : 'go'}" data-a="modal-confirm">${esc(confirmText)}</button>
+				</div>
+			</div>
+		`
+		modal(title, contentHtml)
+	})
+}
 
 function openAllStatusGuide() {
 	modal('Guía de Estados y Protocolos', `
@@ -572,7 +604,7 @@ function renderHeaderActive() {
 function renderTabs() {
 	$('#tabs').innerHTML = S.list.map((p) => {
 		const r = S.reports[p.id] || p.lastTest
-		const v = r?.verdict ? VERD[r.verdict] || VERD.unknown : null
+		const v = r?.verdict ? getVerdictView(p, r) : null
 		const dot = p.installed ? 'ok' : v ? v.cls : ''
 		const badge = p.installed ? `<span class="tag ok" style="font-size:9px;padding:1px 4px;margin-left:4px;font-weight:700">ACTIVO</span>` : ''
 		return `<button data-a="sel" data-p="${esc(p.id)}" aria-current="${p.id === S.sel}">
@@ -581,29 +613,192 @@ function renderTabs() {
 	renderHeaderActive()
 }
 
+function detectCapabilities(p, r) {
+	const modelResList = Object.values(p?.modelResults || {})
+	const curModel = p?.model || S.selectedModel?.[p?.id]
+	const curRes = curModel ? p?.modelResults?.[curModel] : null
+	const modelTarget = curRes?.target || null
+
+	const hasAnthropic = Boolean(
+		(r?.supports?.anthropic ?? p?.supports?.anthropic) ||
+		(r?.checks?.anthropic?.status === 'ok' || r?.checks?.anthropic?.status === 'pass') ||
+		r?.verdict === 'claude_only' ||
+		modelTarget === 'claude' ||
+		modelResList.some((x) => (x.target === 'claude' || x.protocol === 'anthropic') && x.ok)
+	)
+
+	const hasResponses = Boolean(
+		(r?.supports?.responses ?? p?.supports?.responses) ||
+		(r?.checks?.responses?.status === 'ok' || r?.checks?.responses?.status === 'pass') ||
+		r?.verdict === 'codex_ready' ||
+		modelTarget === 'responses' ||
+		modelResList.some((x) => (x.target === 'responses' || x.protocol === 'responses') && x.ok)
+	)
+
+	const hasChat = Boolean(
+		(r?.supports?.chat ?? p?.supports?.chat) ||
+		(r?.checks?.chat?.status === 'ok' || r?.checks?.chat?.status === 'warn' || r?.checks?.chat?.status === 'pass') ||
+		r?.verdict === 'chat_only' ||
+		p?.useBridge === true ||
+		modelTarget === 'chat' ||
+		modelResList.some((x) => (x.target === 'chat' || x.protocol === 'chat') && x.ok)
+	)
+
+	return { hasAnthropic, hasResponses, hasChat }
+}
+
+function getVerdictView(p, r) {
+	if (!r?.verdict) return { cls:'idle', big:'SIN PROBAR', why:'Dale a "Probar API".' }
+	const v = VERD[r.verdict] || VERD.unknown
+	const { hasAnthropic, hasResponses, hasChat } = detectCapabilities(p, r)
+
+	if (hasAnthropic && hasResponses) {
+		return {
+			cls: 'ok',
+			big: 'COMPATIBLE CON AMBAS TERMINALES (DIRECTO)',
+			why: 'Conexión directa y 100% autónoma tanto en Codex CLI como en Claude Code (no requiere servidor Node).',
+		}
+	}
+	if (hasAnthropic && (hasChat || r.verdict === 'chat_only' || r.verdict === 'no_responses') && !hasResponses) {
+		return {
+			cls: 'info',
+			big: 'COMPATIBLE CON AMBAS TERMINALES',
+			why: 'Directo en Claude Code (sin servidor Node) y mediante puente local en Codex CLI (servidor Node activo).',
+		}
+	}
+	if (r.verdict === 'claude_only' || (hasAnthropic && !hasChat && !hasResponses)) {
+		return {
+			cls: 'info',
+			big: 'ANTHROPIC DIRECTO',
+			why: 'Conexión directa nativa con Claude Code (/v1/messages). Incompatible con Codex CLI.',
+		}
+	}
+	return v
+}
+
+function terminalComparisonHtml(p, r) {
+	if (!r?.verdict || r.verdict === 'unknown') return ''
+
+	const { hasAnthropic, hasResponses, hasChat } = detectCapabilities(p, r)
+
+	let codexTitle = 'Sin verificar', codexDetail = 'Pendiente de prueba', codexCls = 'dim', codexIcon = '—'
+	let claudeTitle = 'Sin verificar', claudeDetail = 'Pendiente de prueba', claudeCls = 'dim', claudeIcon = '—'
+	let advice = ''
+
+	if (hasResponses) {
+		codexTitle = 'Directo (Responses)'
+		codexDetail = '100% autónomo (sin servidor Node)'
+		codexCls = 'ok'
+		codexIcon = '✓'
+	} else if (hasChat) {
+		codexTitle = 'Puente Local (Chat)'
+		codexDetail = 'Requiere mantener Node activo (puerto 7789)'
+		codexCls = 'warn'
+		codexIcon = '⚡'
+	} else if (r.verdict === 'claude_only') {
+		codexTitle = 'Incompatible'
+		codexDetail = 'Solo soporta protocolo Anthropic'
+		codexCls = 'bad'
+		codexIcon = '✕'
+	} else {
+		codexTitle = 'No disponible'
+		codexDetail = 'Error en endpoint o clave'
+		codexCls = 'bad'
+		codexIcon = '✕'
+	}
+
+	if (hasAnthropic) {
+		claudeTitle = 'Directo (Anthropic)'
+		claudeDetail = '100% autónomo (sin servidor Node)'
+		claudeCls = 'ok'
+		claudeIcon = '✓'
+	} else if (r.verdict && r.verdict !== 'unknown' && r.verdict !== 'unreachable') {
+		claudeTitle = 'Incompatible'
+		claudeDetail = 'No implementa /v1/messages'
+		claudeCls = 'bad'
+		claudeIcon = '✕'
+	}
+
+	if (hasAnthropic && hasResponses) {
+		advice = 'Te conviene en cualquiera de las dos terminales: ambas funcionan directas y autónomas sin depender de este servidor Node.'
+	} else if (hasAnthropic && !hasResponses && hasChat) {
+		advice = 'Te conviene abrirlo en Claude Code porque funciona directo y no necesitas tener abierto este servidor. Si lo abres en Codex CLI, recuerda dejar este servidor Node encendido.'
+	} else if (!hasAnthropic && hasResponses) {
+		advice = 'Te conviene abrirlo en Codex CLI (conexión directa sin servidor Node). Este proveedor no es compatible con Claude Code.'
+	} else if (!hasAnthropic && !hasResponses && hasChat) {
+		advice = 'Solo puedes usarlo en Codex CLI mediante puente local. Debes mantener este servidor Node encendido mientras trabajes.'
+	} else if (hasAnthropic && !hasResponses && !hasChat) {
+		advice = 'Solo puedes usarlo en Claude Code (conexión directa sin servidor Node). Codex CLI no lo soporta.'
+	}
+
+	return `
+		<div style="margin:12px 0 14px;background:rgba(4,8,12,.7);border:1px solid var(--line2);border-radius:var(--r);padding:10px 12px">
+			<div style="font-size:10px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.12em;margin-bottom:8px">
+				Compatibilidad por Terminal
+			</div>
+			<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+				<div style="background:var(--pane);border:1px solid var(--line);border-radius:var(--r);padding:8px">
+					<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px">
+						<span style="font-size:11px;font-weight:700;color:var(--txt)">Codex CLI</span>
+						<span class="tag ${codexCls}" style="font-size:9px;padding:1px 5px">${codexIcon} ${esc(codexTitle)}</span>
+					</div>
+					<div style="font-size:10.5px;color:var(--txt2);margin-top:4px">${esc(codexDetail)}</div>
+				</div>
+				<div style="background:var(--pane);border:1px solid var(--line);border-radius:var(--r);padding:8px">
+					<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px">
+						<span style="font-size:11px;font-weight:700;color:var(--txt)">Claude Code</span>
+						<span class="tag ${claudeCls}" style="font-size:9px;padding:1px 5px">${claudeIcon} ${esc(claudeTitle)}</span>
+					</div>
+					<div style="font-size:10.5px;color:var(--txt2);margin-top:4px">${esc(claudeDetail)}</div>
+				</div>
+			</div>
+			${advice ? `<div style="margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:11px;color:var(--amber);display:flex;align-items:center;gap:6px">
+				<span>💡</span> <span>${esc(advice)}</span>
+			</div>` : ''}
+		</div>`
+}
+
 /* ═════════════════════════════════════════════ panel: estado */
 
 function paneStatus(p) {
 	const r = S.reports[p.id] || p.lastTest
-	const v = r?.verdict ? VERD[r.verdict] || VERD.unknown : { cls:'idle', big:'SIN PROBAR', why:'Dale a "Probar API".' }
+	const v = getVerdictView(p, r)
 	const b = r?.checks?.billing
-	const saldo = b?.unlimited ? 'sin limite' : b?.status === 'ok' ? money(b.remaining) : null
+	const isSentinel = Boolean(
+		b?.unlimited ||
+		(typeof b?.remaining === 'number' && b.remaining >= 10000) ||
+		(typeof b?.granted === 'number' && b.granted >= 10000)
+	)
+	let saldo = '—'
+	if (b) {
+		if (b.status === 'unsupported' || isSentinel) {
+			saldo = 'No expuesto'
+		} else if (b.status === 'ok') {
+			saldo = typeof b.remaining === 'number' ? money(b.remaining) : '—'
+		}
+	}
 	const cat = S.cats[p.id]
 
 	return `<section class="pane">
-		<h2>Estado<span class="sp"></span>${p.installed ? tag('ok','activo en codex') : tag('idle','no instalado')}</h2>
+		<h2>Estado<span class="sp"></span>${p.installed ? tag('ok','activo en codex') : p.inConfig ? tag('ok','en config.toml') : tag('idle','sin registrar')}</h2>
 		<div class="in">
 			<div class="verdict ${v.cls}">
 				<span class="big">${esc(v.big)}</span>
 			</div>
-			<p class="hint" style="margin:-8px 0 14px">${esc(v.why)}</p>
+			<p class="hint" style="margin:-8px 0 10px">${esc(v.why)}</p>
+			${terminalComparisonHtml(p, r)}
 
 			<div class="facts">
 				<div><div class="k">Proveedor</div><div class="v hot">${esc(p.label)}</div></div>
 				<div><div class="k">Modelo</div><div class="v ${p.model ? '' : 'mut'}">${esc(p.model || 'sin elegir')}</div></div>
 				<div><div class="k">Modelos</div><div class="v">${cat ? cat.models.length : '—'}</div></div>
-				<div><div class="k">Saldo</div><div class="v">${esc(saldo || '—')}</div></div>
+				<div><div class="k">Saldo</div><div class="v ${isSentinel || b?.status === 'unsupported' ? 'mut' : ''}" style="${isSentinel || b?.status === 'unsupported' ? 'font-size:11.5px' : ''}">${esc(saldo)}</div></div>
 			</div>
+
+			${b && (isSentinel || b.status === 'unsupported' || b.status === 'ok') ? `<div class="note" style="margin:10px 0 12px;padding:8px 12px;font-size:11px;line-height:1.4;border-left:2px solid var(--cyan);background:rgba(0,229,255,.05);display:flex;gap:8px;align-items:flex-start">
+				<span style="color:var(--cyan);flex-shrink:0;margin-top:1px">${SVG_INFO}</span>
+				<div><strong>Saldo de cuenta:</strong> Los proveedores relay no exponen tu billetera real por API (devuelven números ficticios como $99M o cuotas del grupo). Para ver tus fondos reales, revísalos directamente en la web del proveedor.</div>
+			</div>` : ''}
 
 			<div class="row">
 				<button class="b go" data-a="test" data-p="${esc(p.id)}">Probar API</button>
@@ -628,7 +823,14 @@ function checks(p) {
 		const c = r.checks[k]
 		const st = c.status === 'ok' ? 'pass' : c.status === 'unsupported' ? 'idle' : c.status
 		let d = c.detail || ''
-		if (k === 'billing' && c.status === 'ok' && !c.unlimited) d = `Restante ${money(c.remaining)}. ${d}`
+		if (k === 'billing') {
+			const isSent = Boolean(c.unlimited || (typeof c.remaining === 'number' && c.remaining >= 10000) || (typeof c.granted === 'number' && c.granted >= 10000))
+			if (isSent || c.status === 'unsupported') {
+				d = 'El saldo real de tu billetera no se expone por API (los relays devuelven cuotas centinela o de grupo). Consúltalo en su web.'
+			} else if (c.status === 'ok' && typeof c.remaining === 'number') {
+				d = `Cuota técnica de token ${money(c.remaining)}. ${d}`
+			}
+		}
 		return `<li><span class="mk ${st}">${MK[c.status] || '–'}</span>
 			<span><span class="t2">${esc(CKL[k] || k)}</span><span class="d2">${esc(d)}</span></span>
 			<span class="ms">${c.ms ? c.ms + ' ms' : ''}</span></li>`
@@ -667,17 +869,22 @@ function cfgView() {
 			<div class="row" style="margin-top:9px"><button class="b go" data-a="repair">Reparar config.toml</button></div>
 			</div></div>`
 			: `<div class="note ok" style="margin-top:11px"><span class="i">✓</span><div>
-				<strong>TOML valido.</strong> Sin claves ni tablas duplicadas: Codex lo acepta.</div></div>`}
+				<strong>TOML válido.</strong> Sin claves ni tablas duplicadas: Codex lo acepta.</div></div>`}
 
-		${!c.clean ? `<div class="note" style="margin-top:11px"><span class="i">!</span><div>
-			<strong>Valido, pero sucio.</strong> Nada de esto rompe a Codex; solo estorba:
+		${c.duplicateRelays?.length ? `
+			<div class="note info" style="margin-top:11px"><span class="i">ℹ</span><div>
+				<strong>Proveedores con relay compartido:</strong>
+				<div style="margin-top:2px;color:var(--txt2);font-size:11.5px">
+					${c.duplicateRelays.map((d) => `Los bloques <code>${esc(d.ids.join(', '))}</code> apuntan al endpoint <code>${esc(d.url)}</code>. Son totalmente válidos para ejecutar sesiones en paralelo en distintas ventanas de terminal.`).join('<br>')}
+				</div>
+			</div></div>` : ''}
+
+		${!c.clean ? `<div class="note warn" style="margin-top:11px"><span class="i">!</span><div>
+			<strong>Elementos obsoletos en config.toml:</strong>
 			<ul>${c.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>
-			${c.duplicateRelays.length ? `<p>Suele pasar por registrar la misma API dos veces con el nombre algo
-				distinto. Solo uno esta activo (<code>${esc(c.activeProvider || '')}</code>); el otro no hace nada.</p>` : ''}
-			${c.legacyTuning.length ? `<p>Los <code>request_max_retries</code> y compania los escribio una version
-				anterior del panel, no tu. Ya no se escriben salvo que el relay vaya lento.</p>` : ''}
+			${c.legacyTuning?.length ? `<p>Se detectaron claves de reintento de red obsoletas escritas por versiones antiguas del panel.</p>` : ''}
 			<div class="row" style="margin-top:9px">
-				<button class="b go" data-a="clean">Limpiar${
+				<button class="b go" data-a="clean">Limpiar elementos obsoletos${
 					c.orphans.length ? ` (quitar ${esc(c.orphans.join(', '))})` : ''
 				}</button>
 			</div>
@@ -749,11 +956,11 @@ function settingsFormHtml(p) {
 		<p class="hint" style="margin-bottom:12px">Estos ajustes aplican únicamente a <b>Codex CLI</b> y se guardan en <code>config.toml</code>. Claude Code no los usa y requiere que el relay sea compatible con el protocolo Anthropic.</p>
 		<form data-a="savecfg" data-p="${esc(p.id)}">
 			<div class="g2">
-				${sel('effort', 'model_reasoning_effort', p.effort ?? '', 'Nivel de razonamiento')}
-				${sel('approvalPolicy', 'approval_policy', p.approvalPolicy ?? '', 'Aprobaciones')}
+				${sel('effort', 'model_reasoning_effort', p.effort || 'high', 'Nivel de razonamiento', 'high')}
+				${sel('approvalPolicy', 'approval_policy', p.approvalPolicy || 'never', 'Aprobaciones', 'never')}
 			</div>
 			<div class="g2">
-				${sel('sandboxMode', 'sandbox_mode', p.sandboxMode ?? '', 'Sandbox')}
+				${sel('sandboxMode', 'sandbox_mode', p.sandboxMode || 'danger-full-access', 'Sandbox', 'danger-full-access')}
 				<div class="f"><label class="l" for="s-envKey">Variable de la key</label>
 					<input id="s-envKey" name="envKey" type="text" value="${esc(p.envKey || '')}" /></div>
 			</div>
@@ -813,7 +1020,7 @@ function paneChat(p) {
 			<div style="display:flex;align-items:center;gap:8px;flex:1;min-width:260px">
 				<span style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--txt2);white-space:nowrap">RAZONAMIENTO:</span>
 				<div style="flex:1;min-width:180px">
-					${sel('effort', 'model_reasoning_effort', p.effort ?? '', '')}
+					${sel('effort', 'model_reasoning_effort', p.effort || 'high', '', 'high')}
 				</div>
 			</div>
 			<button class="b" type="button" data-a="test-effort" data-p="${esc(p.id)}" data-m="${esc(m)}" style="white-space:nowrap;padding:0 12px;height:33px;font-size:11.5px" ${isTestingEffort ? 'disabled' : ''}>
@@ -842,8 +1049,9 @@ function paneChat(p) {
 					</div>
 				`).join('')}
 				${isSending ? `
-					<div style="align-self:flex-start;padding:8px 12px;border-radius:var(--r);background:var(--pane2);border:1px solid var(--line)">
-						<span style="color:var(--cyan);font-size:11px" class="blink">● Esperando respuesta del servidor...</span>
+					<div style="align-self:flex-start;padding:8px 12px;border-radius:var(--r);background:var(--pane2);border:1px solid var(--line);display:inline-flex;align-items:center;gap:7px">
+						<span class="blink" style="color:var(--cyan);font-size:10px">●</span>
+						<span style="color:var(--cyan);font-size:11px">Esperando respuesta del servidor <span id="chat-timer" style="color:var(--dim);font-weight:700">(1s / 15s máx)</span>...</span>
 					</div>
 				` : ''}
 			</div>
@@ -889,25 +1097,32 @@ function tableHtml(p) {
 		</th>
 		<th style="text-align:right"></th></tr></thead>
 		<tbody>${rs.map(({ m, r, dec }) => {
-			const inScan = S.scanning && S.scanType === 'all' && !r
+			const inScan = S.scanning && (S.scanType === 'all' || S.scanModels?.has(m)) && !r
 			const isTrying = S.trying?.has(m) || inScan
-			const isCur = p.model === m
-			const isSel = active === m
+			const isCurInToml = p.installed && p.model === m
+			const isCurInClaude = Boolean(
+				S.claude?.exists &&
+				(S.claude.model === m || S.claude.opusModel === m || S.claude.sonnetModel === m || S.claude.haikuModel === m) &&
+				normUrl(p.baseUrl) === normUrl(S.claude.baseUrl)
+			)
+			const isSel = active === m && Boolean(active)
 			const statusIcon = !r
 				? ''
 				: r.ok
 					? `<span style="color:var(--lime);font-weight:700;font-size:12px;margin-right:2px">✓</span>`
 					: `<span style="color:var(--mag);font-weight:700;font-size:12px;margin-right:2px">✕</span>`
 			const st = isTrying
-				? `<span class="tag warn"><span class="blink">●</span> probando...</span>`
+				? `<span class="tag warn"><span class="blink">●</span> verificando...</span>`
 				: !r
 					? `<span class="tag idle" data-a="showstatus" data-p="${esc(p.id)}" data-m="${esc(m)}" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px">sin probar ${SVG_INFO}</span>`
 					: `<span data-a="showstatus" data-p="${esc(p.id)}" data-m="${esc(m)}" style="cursor:pointer">${resultHtml(r)}</span>`
 			return `<tr class="${r?.ok ? 'hit' : ''} ${isSel ? 'cur' : ''}" data-a="pickmodel" data-p="${esc(p.id)}" data-m="${esc(m)}" style="cursor:pointer">
 				<td>
-					<div class="n" style="display:flex;align-items:center;gap:6px">
+					<div class="n" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
 						${statusIcon}<span>${esc(m)}</span>
-						${isCur ? `<span class="tag ok" style="font-size:9px;padding:2px 6px">✓ EN CONFIG</span>` : isSel ? `<span class="tag info" style="font-size:9px;padding:2px 6px">ELEGIDO</span>` : ''}
+						${isCurInToml ? `<span class="tag ok" style="font-size:9px;padding:2px 6px">✓ EN CONFIG.TOML</span>` : ''}
+						${isCurInClaude ? `<span class="tag ok" style="font-size:9px;padding:2px 6px">✓ EN SETTINGS.JSON</span>` : ''}
+						${isSel && !isCurInToml && !isCurInClaude ? `<span class="tag info" style="font-size:9px;padding:2px 6px">ELEGIDO</span>` : ''}
 					</div>
 					${dec ? '<div class="w">el relay lo declara compatible con Responses</div>' : r?.detail ? `<div class="w">${esc(r.detail.slice(0,80))}</div>` : ''}
 				</td>
@@ -921,22 +1136,56 @@ function tableHtml(p) {
 		}).join('')}</tbody></table>`
 }
 
-function paneModels(p) {
+function chipsHtml(p) {
+	if (!p) return ''
 	const cat = S.cats[p.id]
-	if (!cat) {
-		return `<section class="pane grow"><h2>Modelos de ${esc(p.label)}</h2>
-			<div class="in"><div class="blank"><b>Sin cargar</b>
-			<div class="row" style="margin-top:10px;justify-content:center">
-			<button class="b go" data-a="cat" data-p="${esc(p.id)}">Cargar modelos</button></div></div></div></section>`
+	const allList = cat?.models || []
+	const resMap = S.res[p.id] || {}
+	const total = allList.length
+	const okCount = allList.filter((m) => resMap[m]?.ok).length
+	const untestedCount = allList.filter((m) => !resMap[m]).length
+	const chipsData = [
+		['all', total ? `Todos (${total})` : 'Todos'],
+		['ok', total ? `Funcionan (${okCount}/${total})` : 'Funcionan'],
+		['untested', total ? `Sin probar (${untestedCount})` : 'Sin probar'],
+	]
+	return chipsData
+		.map(([f, t]) => `<button data-a="filter" data-f="${f}" aria-pressed="${S.filter === f}">${esc(t)}</button>`)
+		.join('')
+}
+
+function paneModels(p) {
+	if (!p) return `<section class="pane grow blank"><p class="hint">Elige o crea un proveedor.</p></section>`
+	const cat = S.cats[p.id]
+	if (S.loadingCatalog?.[p.id]) {
+		return `<section class="pane grow">
+			<h2>Modelos disponibles<span class="sp"></span><span class="tag ok">Proveedor: ${esc(p.label)}</span></h2>
+			<div class="in"><div class="blank" style="padding:36px 20px">
+				<div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:8px">
+					<span class="blink" style="color:var(--cyan)">●</span>
+					<b>Cargando modelos...</b>
+				</div>
+				<div style="font-size:11px;color:var(--dim)">
+					Consultando el catálogo en el relay en tiempo real.
+				</div>
+			</div></div></section>`
+	}
+	if (cat?.error && (!cat.models || !cat.models.length)) {
+		return `<section class="pane grow">
+			<h2>Modelos disponibles<span class="sp"></span><span class="tag ok">Proveedor: ${esc(p.label)}</span></h2>
+			<div class="in"><div class="blank" style="padding:36px 20px">
+				<div style="color:var(--mag);font-weight:700;margin-bottom:6px">No se pudo cargar el catálogo de ${esc(p.label)}</div>
+				<div style="font-size:11px;color:var(--dim);margin-bottom:14px">${esc(cat.error)}</div>
+				<button class="b go xs" data-a="cat" data-p="${esc(p.id)}">Reintentar carga</button>
+			</div></div></section>`
 	}
 	const active = curModel(p)
 	return `<section class="pane grow">
-		<h2>Modelos de ${esc(p.label)}<span class="sp"></span>${active ? tag('info', 'Elegido: ' + active) : tag('idle', 'Sin modelo')}</h2>
+		<h2>Modelos disponibles<span class="sp"></span><span class="tag ok" style="margin-right:6px">Proveedor: ${esc(p.label)}</span>${active ? tag('info', 'Elegido: ' + active) : tag('idle', 'Sin modelo')}</h2>
 		<div class="mbar">
 			<div class="s"><input type="search" data-a="q" value="${esc(S.q)}"
 				placeholder="buscar: gpt, codex, claude..." aria-label="Buscar modelo" /></div>
-			<div class="chips">${[['all','Todos'],['ok','Funcionan'],['untested','Sin probar']]
-				.map(([f,t]) => `<button data-a="filter" data-f="${f}" aria-pressed="${S.filter===f}">${t}</button>`).join('')}</div>
+			<div class="chips" id="mchips">${chipsHtml(p)}</div>
 			<div class="row">
 				<button class="b xs" data-a="cat" data-p="${esc(p.id)}">Recargar</button>
 				<button class="b xs go" data-a="scanall" data-p="${esc(p.id)}" ${S.scanning ? 'disabled' : ''}>${
@@ -957,36 +1206,99 @@ function paneUse(p) {
 	const guideKey = `${S.dest}:${m || 'none'}`
 	const g = S.guides[p.id]?.[guideKey] || (S.guides[p.id]?.[S.dest]?.model === m ? S.guides[p.id]?.[S.dest] : null)
 	const isConfiguredWithThisModel = p.installed && p.model === m
-	const needsInstall = !p.installed
 	const canAct = Boolean(m)
-	const testedProtocol = resultProtocol(S.res[p.id]?.[m])
-	const anthSupported = p.supports?.anthropic ?? p.lastTest?.supports?.anthropic ?? (g?.supported !== undefined ? g.supported : null)
-	const claudeBlocked = S.dest === 'claude' && (testedProtocol === 'chat' || anthSupported === false)
-	const claudeNotice = S.dest !== 'claude' ? '' : testedProtocol === 'anthropic' || anthSupported === true
-		? `<div class="note ok" style="margin-bottom:12px"><span class="i">✓</span><div><strong>Protocolo Anthropic verificado.</strong> El modelo respondio a <code>/messages</code>.</div></div>`
-		: `<div class="note" style="margin-bottom:12px"><span class="i">!</span><div><strong>Compatibilidad Anthropic no verificada.</strong> Claude Code directo requiere <code>/messages</code>; responder por ${testedProtocol === 'responses' ? 'Responses' : testedProtocol === 'chat' ? 'Chat' : 'otro protocolo'} no es suficiente.</div></div>`
+	const r = S.res[p.id]?.[m]
+	const chatMsgs = S.chatMessages?.[p.id + ':' + m] || []
+	const chatOk = chatMsgs.some((x) => x.role === 'assistant' && !x.error)
+	const effortRes = S.effortTest?.[p.id + ':' + m]
+	const effortOk = Boolean(effortRes?.ok)
+
+	const isOnline = Boolean((r && r.ok) || chatOk || effortOk)
+	const isFailed = Boolean((r && !r.ok) || (effortRes && !effortRes.ok && !chatOk && (!r || !r.ok)))
+	const hasAnthropic = chatMsgs.some((x) => x.protocol === 'anthropic') || resultProtocol(r) === 'anthropic'
+	const testedProtocol = (S.dest === 'claude' && hasAnthropic) ? 'anthropic' : (resultProtocol(r) || (effortOk ? 'responses' : hasAnthropic ? 'anthropic' : chatOk ? 'chat' : ''))
 
 	let body
 	if (!canAct) {
-		body = `<div class="blank"><b>Elegi un modelo primero</b>
-			Haz clic en un modelo de la tabla izquierda.</div>`
-	} else if (claudeBlocked || (S.dest === 'claude' && g && g.supported === false)) {
-		body = `<div class="note bad"><span class="i">!</span><div>
-			<strong>Este proveedor no soporta el protocolo Anthropic (/messages).</strong>
-			<p>Claude Code no puede usarlo directamente. No se ofrece configurarlo porque fallará.</p></div></div>`
-	} else if (needsInstall) {
-		body = `<div class="note info"><span class="i">i</span><div>
-			<strong>Falta instalarlo en Codex con <code>${esc(m)}</code>.</strong>
-			<p>Escribe el proveedor en <code>config.toml</code> como activo, para que te baste
-			escribir <code>codex</code>. Un solo archivo, sin perfiles.</p></div></div>
-			<div class="row" style="margin-top:12px">
-			<button class="b go" data-a="use" data-p="${esc(p.id)}" data-m="${esc(m)}">Instalar y usar ${esc(m)} en Codex</button></div>`
-	} else if (!isConfiguredWithThisModel && S.dest === 'codex') {
-		body = `<div class="note info"><span class="i">i</span><div>
-			<strong>Cambiar modelo activo a <code>${esc(m)}</code>.</strong>
-			<p>El proveedor ya está instalado en Codex con <code>${esc(p.model || 'otro')}</code>. Pulsa el botón para activar <code>${esc(m)}</code>.</p></div></div>
-			<div class="row" style="margin-top:12px">
-			<button class="b go" data-a="use" data-p="${esc(p.id)}" data-m="${esc(m)}">Usar ${esc(m)} en Codex</button></div>`
+		body = `<div class="blank"><b>Elige un modelo primero</b>
+			Haz clic en un modelo de la tabla izquierda para ver sus comandos.</div>`
+	} else if (isFailed) {
+		body = `
+			<div class="note bad" style="margin-bottom:14px">
+				<span class="i">✕</span>
+				<div>
+					<strong>El modelo <code>${esc(m)}</code> no está disponible (falló la prueba):</strong>
+					<div style="margin-top:3px">${esc(r?.detail || r?.reason || effortRes?.error || 'El relay rechazó las peticiones para este modelo.')}</div>
+				</div>
+			</div>
+			<div class="blank" style="padding:22px 14px">
+				<b>Este modelo no está respondiendo</b>
+				No se pueden generar instrucciones de terminal para un modelo caído o con error.<br>
+				Elige un modelo funcional (con <span style="color:var(--lime)">✓</span> en la tabla) o reintenta probarlo.
+				${(() => {
+					const isTrying = Boolean(S.trying?.has(m))
+					return `<div class="row" style="margin-top:14px;justify-content:center;gap:8px">
+						<button class="b" data-a="try" data-p="${esc(p.id)}" data-m="${esc(m)}" ${isTrying ? 'disabled style="opacity:0.8"' : ''}>
+							${isTrying ? `<span class="blink">●</span> Probando ${esc(m)}...` : 'Reintentar prueba'}
+						</button>
+						<button class="b" data-a="right" data-d="chat" ${isTrying ? 'disabled' : ''}>Probar en chat</button>
+					</div>
+					${isTrying ? `
+						<div class="note info" style="margin-top:14px;text-align:left;display:flex;align-items:center;gap:10px">
+							<span class="blink" style="color:var(--cyan);font-size:16px">●</span>
+							<div>
+								<strong>Verificando disponibilidad en tiempo real...</strong>
+								<div style="margin-top:2px;font-size:11.5px;color:var(--txt2)">Probando respuestas de <code>${esc(m)}</code> en todos los protocolos.</div>
+							</div>
+						</div>
+					` : ''}`
+				})()}
+			</div>`
+	} else if (!isOnline) {
+		const isTrying = Boolean(S.trying?.has(m))
+		body = `
+			<div class="note info" style="margin-bottom:14px">
+				<span class="i">i</span>
+				<div>
+					<strong>Modelo sin verificar:</strong>
+					<div style="margin-top:3px">El modelo <code>${esc(m)}</code> aún no ha sido probado. Comprueba que responda para detectar su protocolo real y generar los comandos correspondientes.</div>
+				</div>
+			</div>
+			<div class="blank" style="padding:22px 14px">
+				<b>Verifica el modelo antes de usarlo</b>
+				Haz clic abajo para comprobar si el relay lo tiene activo y qué protocolo soporta.
+				<div class="row" style="margin-top:14px;justify-content:center;gap:8px">
+					<button class="b go" data-a="try" data-p="${esc(p.id)}" data-m="${esc(m)}" ${isTrying ? 'disabled style="opacity:0.85"' : ''}>
+						${isTrying ? `<span class="blink">●</span> Probando ${esc(m)}...` : `Probar ${esc(m)} ahora`}
+					</button>
+					<button class="b" data-a="right" data-d="chat" ${isTrying ? 'disabled' : ''}>Abrir Chat de prueba</button>
+				</div>
+				${isTrying ? `
+					<div class="note info" style="margin-top:14px;text-align:left;display:flex;align-items:center;gap:10px">
+						<span class="blink" style="color:var(--cyan);font-size:16px">●</span>
+						<div>
+							<strong>Verificando conectividad y protocolos en tiempo real...</strong>
+							<div style="margin-top:2px;font-size:11.5px;color:var(--txt2)">Probando respuestas de <code>${esc(m)}</code> en Responses, Chat y Anthropic Messages.</div>
+						</div>
+					</div>
+				` : ''}
+			</div>`
+	} else if (S.dest === 'claude' && testedProtocol !== 'anthropic') {
+		body = `
+			<div class="note bad" style="margin-bottom:14px">
+				<span class="i">!</span>
+				<div>
+					<strong>Incompatible con Claude Code directo (/messages):</strong>
+					<div style="margin-top:3px"><code>${esc(m)}</code> está online pero respondió por <b>${esc(protocolLabel(r) || testedProtocol || 'Chat')}</b>. Claude Code requiere obligatoriamente el protocolo nativo <code>/v1/messages</code>. Te recomendamos usar <b>Codex CLI</b> con este modelo.</div>
+				</div>
+			</div>
+			<div class="blank" style="padding:22px 14px">
+				<b>Protocolo no soportado por Claude Code</b>
+				Cambia a la pestaña <b>Codex CLI</b> para usar este modelo o elige un modelo con protocolo Anthropic.
+				<div class="row" style="margin-top:14px;justify-content:center">
+					<button class="b go" data-a="dest" data-d="codex">Ver en Codex CLI</button>
+				</div>
+			</div>`
 	} else if (!g) {
 		if (!S.loadingGuide?.[p.id + ':' + S.dest]) {
 			S.loadingGuide = S.loadingGuide || {}
@@ -995,36 +1307,167 @@ function paneUse(p) {
 		}
 		body = `<p class="hint">Cargando instrucciones...</p>`
 	} else {
-		const bridgeNotice = S.dest === 'codex' && p.useBridge
-			? `<div class="note warn" style="margin-bottom:12px"><span class="i">⚡</span><div><strong>Requiere servidor Node activo:</strong> Gorouter solo ofrece Chat Completions y Codex CLI exige Responses. El panel traduce las peticiones en segundo plano en <code>127.0.0.1</code>, por lo que debes mantener <code>node server.js</code> encendido mientras uses Codex.</div></div>`
-			: S.dest === 'codex'
-			? `<div class="note ok" style="margin-bottom:12px"><span class="i">✓</span><div><strong>Conexión directa a internet:</strong> Este proveedor soporta Responses de forma nativa. Puedes cerrar el panel y apagar <code>node server.js</code>; Codex funcionará directamente.</div></div>`
+		const connectionNotice = S.dest === 'codex'
+			? (testedProtocol === 'responses'
+				? `<div class="note ok" style="margin-bottom:12px"><span class="i">✓</span><div><strong>Conexión directa a internet (Responses):</strong> Este modelo soporta Responses de forma nativa. Puedes cerrar el panel y apagar <code>node server.js</code>; Codex funcionará 100% autónomo.</div></div>`
+				: `<div class="note warn" style="margin-bottom:12px"><span class="i">⚡</span><div><strong>Requiere servidor Node activo (Puente traductor):</strong> Este modelo responde por Chat Completions y Codex CLI exige Responses. El panel traduce las peticiones en segundo plano en <code>127.0.0.1</code>, por lo que debes mantener <code>node server.js</code> encendido mientras uses Codex.</div></div>`
+			  )
+			: S.dest === 'claude'
+			? `<div class="note ok" style="margin-bottom:12px"><span class="i">✓</span><div><strong>Protocolo Anthropic verificado:</strong> El modelo respondió correctamente a <code>/messages</code>. Compatible nativo con Claude Code.</div></div>`
 			: ''
-		body = `${claudeNotice}${bridgeNotice}
-		${isConfiguredWithThisModel ? `<div class="note ok" style="margin-bottom:12px"><span class="i">✓</span><div><strong>Modelo activo en config.toml:</strong> <code>${esc(m)}</code></div></div>` : ''}
-		<ol class="gsteps">${g.steps.map((st) => `<li>
-			<div class="h">${esc(st.title)}</div>
-			${st.cmds ? st.cmds.map((c) => {
-				const raw = typeof c === 'string' ? c : c.cmd
-				const key = S.keys[p.id] || p.apiKey || ''
-				const disp = maskKeyInText(raw, key)
-				return `<div class="cmd"><code>${esc(disp)}</code>
-					<button class="b xs" data-a="copy" data-t="${esc(raw)}">Copiar</button></div>`
-			}).join('') : ''}
-			${st.file ? `<div class="f">Archivo: ${esc(st.file)}</div>` : ''}
-			${st.json ? (() => {
-				const rawJson = st.json
-				const key = S.keys[p.id] || p.apiKey || ''
-				const dispJson = maskKeyInText(rawJson, key)
-				return `<pre class="j">${esc(dispJson)}</pre>
-					<div class="row" style="margin-top:6px">
-					<button class="b xs" data-a="copy" data-t="${esc(rawJson)}">Copiar JSON</button>
-					${g.supported !== false ? `<button class="b xs go" data-a="applyclaude" data-p="${esc(p.id)}">Escribirlo por mi</button>` : ''}</div>`
-			})() : ''}
-			${st.detail ? `<div class="d">${esc(st.detail)}</div>` : ''}
-		</li>`).join('')}</ol>
-		${g.notes?.length ? `<div class="note" style="margin-top:13px"><span class="i">!</span>
-			<div>${g.notes.map((n) => `<div>${esc(n)}</div>`).join('')}</div></div>` : ''}`
+
+		const terminalSteps = (g.steps || []).filter((st) => !st.json)
+		const fileSteps = (g.steps || []).filter((st) => st.json)
+		const cmdSteps = terminalSteps.filter((st) => st.cmds && st.cmds.length)
+		const infoSteps = terminalSteps.filter((st) => !st.cmds || !st.cmds.length)
+		const allCmds = cmdSteps.flatMap((st) => st.cmds.map((c) => typeof c === 'string' ? c : c.cmd))
+
+		const codexRegistrationPrompt = S.dest === 'codex' && !p.inConfig ? `
+			<div class="note info" style="margin-bottom:14px;padding:9px 12px;font-size:12px">
+				<span class="i">i</span>
+				<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;flex-wrap:wrap">
+					<div>
+						<strong>Registro de tabla necesario para Multiterminal:</strong>
+						<div>Para que Codex reconozca a <code>${esc(p.label)}</code> en la terminal, añade su bloque técnico a <code>config.toml</code> (no altera tu modelo predeterminado de ChatGPT).</div>
+					</div>
+					<button class="b xs go" data-a="register-table" data-p="${esc(p.id)}">Registrar tabla en config.toml</button>
+				</div>
+			</div>` : ''
+
+		const claudePreparationPrompt = S.dest === 'claude' ? (() => {
+			const c = S.claude
+			if (!c) return ''
+			if (c.hasProviderEnv) {
+				return `
+					<div class="note warn" style="margin-bottom:14px;padding:9px 12px;font-size:12px">
+						<span class="i">!</span>
+						<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;flex-wrap:wrap">
+							<div>
+								<strong>Claude Code tiene proveedor fijo en settings.json:</strong>
+								<div>Las variables fijadas en <code>settings.json</code> anulan las de tu terminal. Limpia <code>env</code> y activa el Modo YOLO para multiterminal.</div>
+							</div>
+							<button class="b xs go" data-a="prepclaude">Configurar Claude para Multiterminal (YOLO)</button>
+						</div>
+					</div>`
+			}
+			if (!c.isYolo) {
+				return `
+					<div class="note info" style="margin-bottom:14px;padding:9px 12px;font-size:12px">
+						<span class="i">i</span>
+						<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;flex-wrap:wrap">
+							<div>
+								<strong>Modo YOLO no configurado en Claude Code:</strong>
+								<div>Activa permisos automáticos para que Claude Code jamás pregunte confirmaciones al ejecutar herramientas.</div>
+							</div>
+							<button class="b xs go" data-a="prepclaude">Activar Modo YOLO</button>
+						</div>
+					</div>`
+			}
+			return `
+				<div class="note ok" style="margin-bottom:12px;padding:8px 12px;font-size:11.5px">
+					<span class="i">✓</span>
+					<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;flex-wrap:wrap">
+						<div><strong>Claude Code listo para Multiterminal:</strong> <code>settings.json</code> limpio (variables aisladas por terminal) y permisos en Modo YOLO (sin confirmaciones).</div>
+						<button class="b xs" data-a="prepclaude" style="opacity:0.8">Reconfigurar</button>
+					</div>
+				</div>`
+		})() : ''
+
+		const multiFold = fold(p, 'multiterminal', 'Modo Multiterminal (Recomendado)', tag('ok', 'recomendado'), () => `
+			<div style="font-size:11.5px;color:var(--dim);margin:6px 0 14px">
+				${S.dest === 'codex'
+					? 'Ejecuta en paralelo en cada ventana con banderas <code>-c</code> sin alterar tu <code>config.toml</code>.'
+					: 'Variables de entorno locales por ventana: abre cuantas terminales desees en simultáneo.'}
+			</div>
+
+			${codexRegistrationPrompt}
+			${claudePreparationPrompt}
+
+			<div style="background:var(--pane2);border:1px solid var(--line2);border-radius:var(--r);padding:14px;margin-bottom:14px">
+				<ol class="gsteps" style="margin:0;padding:0">
+					${cmdSteps.map((st) => `<li>
+						<div class="h">${esc(st.title)}</div>
+						${st.cmds ? st.cmds.map((c) => {
+							const raw = typeof c === 'string' ? c : c.cmd
+							const key = S.keys[p.id] || p.apiKey || ''
+							const disp = maskKeyInText(raw, key)
+							return `<div class="cmd"><code>${esc(disp)}</code>
+								<button class="b xs" data-a="copy" data-t="${esc(raw)}">Copiar</button></div>`
+						}).join('') : ''}
+						${st.detail ? `<div class="d">${esc(st.detail)}</div>` : ''}
+					</li>`).join('')}
+				</ol>
+				${allCmds.length > 1 ? `
+					<div style="display:flex;justify-content:flex-end;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+						<button class="b go xs" data-a="copy" data-t="${esc(allCmds.join('\n'))}" style="padding:0 14px;min-height:30px;font-weight:700;display:inline-flex;align-items:center;gap:6px">
+							📋 Copiar todo (${allCmds.length} comandos)
+						</button>
+					</div>
+				` : ''}
+			</div>
+
+			${infoSteps.length ? `
+				<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+					${infoSteps.map((st) => `
+						<div class="note" style="margin:0;padding:8px 12px;font-size:11.5px">
+							<span class="i">ℹ</span>
+							<div>
+								<strong>${esc(st.title)}:</strong>
+								<div style="margin-top:2px;color:var(--txt2)">${esc(st.detail || '')}</div>
+							</div>
+						</div>
+					`).join('')}
+				</div>
+			` : ''}
+
+			${g.notes?.length ? `
+				<div class="note warn" style="margin-top:8px"><span class="i">!</span>
+					<div>${g.notes.map((n) => `<div>${esc(n)}</div>`).join('')}</div></div>
+			` : ''}
+		`, true)
+
+		const defaultFold = S.dest === 'codex' && m ? fold(p, 'setdefault', 'Fijar como modelo activo por defecto en config.toml (Opcional)',
+			isConfiguredWithThisModel ? tag('ok','activo en config') : tag('idle','opcional'),
+			() => `<div style="padding:4px 0">
+				<p class="hint" style="margin-bottom:10px">${isConfiguredWithThisModel
+					? 'Este proveedor y modelo están fijados en la raíz de <code>config.toml</code> como predeterminados al abrir <code>codex</code> sin parámetros.'
+					: 'Solo usa esto si prefieres escribir simplemente <code>codex</code> sin pasar parámetros en la terminal (sustituirá a ChatGPT oficial como predeterminado):'}</p>
+				<div style="display:flex;gap:8px;flex-wrap:wrap">
+					${isConfiguredWithThisModel ? `<button class="b xs" data-a="unset-active">Volver a ChatGPT oficial (Quitar activo)</button>` : ''}
+					<button class="b go" data-a="use" data-p="${esc(p.id)}" data-m="${esc(m)}">${isConfiguredWithThisModel ? 'Reinstalar / Actualizar activo' : `Fijar ${esc(m)} como activo en config.toml`}</button>
+				</div>
+			</div>`
+		) : ''
+
+		const settingsFold = S.dest === 'codex' && m ? fold(p, 'settings', 'Ajustes opcionales de Codex CLI (config.toml)',
+			p.installed ? tag('ok','guardado') : tag('idle','opcional'),
+			() => settingsFormHtml(p)
+		) : ''
+
+		const claudeFold = S.dest === 'claude' && fileSteps.length ? fold(p, 'claudesettings', 'Fijar en ~/.claude/settings.json (Global opcional)', tag('idle', 'opcional'),
+			() => fileSteps.map((st) => `
+				<p class="hint" style="margin-bottom:8px">Guarda la configuración de forma global y permanente en tu máquina:</p>
+				${st.file ? `<div class="f">Archivo: ${esc(st.file)}</div>` : ''}
+				${(() => {
+					const rawJson = st.json
+					const key = S.keys[p.id] || p.apiKey || ''
+					const dispJson = maskKeyInText(rawJson, key)
+					return `<pre class="j">${esc(dispJson)}</pre>
+						<div class="row" style="margin-top:6px">
+						<button class="b xs" data-a="copy" data-t="${esc(rawJson)}">Copiar JSON</button>
+						${g.supported !== false ? `<button class="b xs go" data-a="applyclaude" data-p="${esc(p.id)}">Escribirlo por mí</button>` : ''}</div>`
+				})()}
+			`).join('')
+		) : ''
+
+		body = `
+			${connectionNotice}
+			<div style="display:flex;flex-direction:column;gap:1px;border-bottom:1px solid var(--line)">
+				${multiFold}
+				${defaultFold}
+				${settingsFold}
+				${claudeFold}
+			</div>`
 	}
 
 	return `
@@ -1032,8 +1475,6 @@ function paneUse(p) {
 			`<button data-a="dest" data-d="${d}" aria-pressed="${S.dest === d}">${t}</button>`).join('')}</div>
 		<div class="in">
 			${body}
-			${S.dest === 'codex' && m ? fold(p, 'settings', 'Ajustes opcionales de Codex CLI (config.toml)',
-				p.installed ? tag('ok','guardado') : tag('idle','opcional'), () => settingsFormHtml(p)) : ''}
 		</div>`
 }
 
@@ -1067,8 +1508,8 @@ function formHtml(p) {
 
 /* ═════════════════════════════════════════════ plegable */
 
-function fold(p, key, title, right, inner) {
-	const on = S.fold[key]
+function fold(p, key, title, right, inner, defaultOpen = false) {
+	const on = S.fold[key] !== undefined ? S.fold[key] : Boolean(defaultOpen)
 	return `<div class="fold ${on ? 'on' : ''}">
 		<button data-a="fold" data-k="${esc(key)}" aria-expanded="${Boolean(on)}">
 			<span class="ar">▶</span>${esc(title)}<span class="sp"></span>${right || ''}</button>
@@ -1089,15 +1530,15 @@ function render() {
 			<div class="col">${p && !S.adding ? `<section class="pane grow"><h2>Cómo usarlo</h2>${paneUse(p)}</section>` : `<section class="pane"><h2>Como funciona</h2>
 				<div class="in"><ol class="gsteps">
 				<li><div class="h">Agrega la API</div><div class="d">URL con /v1 y la key.</div></li>
-				<li><div class="h">Elegi el modelo</div><div class="d">El panel prueba cual responde.</div></li>
-				<li><div class="h">Usalo</div><div class="d">Te da los comandos para cada cliente cuando el relay soporta su protocolo.</div></li>
+				<li><div class="h">Elige el modelo</div><div class="d">El panel prueba cuál responde.</div></li>
+				<li><div class="h">Úsalo</div><div class="d">Proporciona los comandos para cada cliente cuando el relay soporta su protocolo.</div></li>
 				</ol></div></section>`}</div>`
 		return
 	}
 
 	if (!S.list.length) {
 		$('#grid').innerHTML = `<div class="col"><section class="pane"><h2>Sin APIs</h2>
-			<div class="in"><div class="blank"><b>Todavia no agregaste ninguna API</b>
+			<div class="in"><div class="blank"><b>Todavía no has agregado ninguna API</b>
 			<div class="row" style="margin-top:10px;justify-content:center">
 			<button class="b go" data-a="add">+ Agregar la primera</button></div></div></div></section></div>
 			<div class="col"></div>`
@@ -1111,7 +1552,7 @@ function render() {
 		<div class="col">${paneStatus(p)}${paneModels(p)}</div>
 		<div class="col">
 			<section class="pane grow">
-				<h2>${rightTitle}<span class="sp"></span><span class="tag ok" style="margin-right:6px"><span style="margin-right:4px">●</span>${esc(p.label)}</span>${m ? tag('info', 'Elegido: ' + m) : tag('idle', 'Sin modelo')}</h2>
+				<h2>${rightTitle}<span class="sp"></span><span class="tag ok" style="margin-right:6px">Proveedor: ${esc(p.label)}</span>${m ? tag('info', 'Elegido: ' + m) : tag('idle', 'Sin modelo')}</h2>
 				<div class="mbar">
 					<div class="chips">
 						<button data-a="right" data-d="chat" aria-pressed="${S.right === 'chat'}">Chat de prueba</button>
@@ -1129,6 +1570,8 @@ function renderTable() {
 	const host = $('#mt')
 	if (!p || !host) return render()
 	host.innerHTML = tableHtml(p)
+	const ch = $('#mchips')
+	if (ch) ch.innerHTML = chipsHtml(p)
 }
 
 async function refresh() {
@@ -1136,14 +1579,9 @@ async function refresh() {
 	S.list = d.providers
 	S.opts = d.options || S.opts
 	S.claude = d.claude || null
-	for (const p of S.list) {
-		if (p.modelResults) {
-			S.res[p.id] = { ...(p.modelResults || {}), ...(S.res[p.id] || {}) }
-		}
-	}
 	if (!cur() && S.list.length) S.sel = S.list[0].id
 	const p = cur()
-	if (p?.model && !S.guides[p.id]?.[S.dest] && (S.dest !== 'codex' || p.installed)) {
+	if (p?.model && !S.guides[p.id]?.[S.dest]) {
 		loadGuide(p.id)
 	}
 	render()
@@ -1166,22 +1604,31 @@ async function runTest(id) {
 					: a.ambiguous ? 'no acepta este modelo' : 'error' }
 		}
 		await refresh()
-		if (r.verdict === 'codex_ready') toast(`${p.label} funciona con "${r.testedModel}".`)
+		if (r.verdict === 'codex_ready') toast(`${p.label}: Conexión directa a Responses verificada con "${r.testedModel}".`)
+		else if (r.verdict === 'chat_only' || r.verdict === 'no_responses') toast(`${p.label}: Verificado por Chat Completions (requiere traductor local).`)
 		else { S.fold.diag = true; render(); toast(`${p.label}: ${VERD[r.verdict]?.big || r.verdict}`, true) }
 	} catch (e) { toast(e.message, true); render() }
 }
 
 async function loadCat(id, quiet) {
+	S.loadingCat = S.loadingCat || {}
+	S.loadingCat[id] = true
 	const btns = document.querySelectorAll(`[data-a="cat"][data-p="${id}"], [data-a="cat"]`)
 	btns.forEach((b) => { b.disabled = true; b.innerHTML = '<span class="blink">●</span> Cargando modelos...' })
+	render()
 	try {
 		S.cats[id] = await api('/api/catalog', { id })
 		if (!quiet) {
-			const n = S.cats[id].models.length
-			toast(n ? `${n} modelos disponibles` : (S.cats[id].error || 'Sin catalogo'), !n)
+			const n = S.cats[id]?.models?.length || 0
+			toast(n ? `${n} modelos disponibles` : (S.cats[id]?.error || 'Sin catalogo'), !n)
 		}
-	} catch (e) { if (!quiet) toast(e.message, true) }
-	render()
+	} catch (e) {
+		S.cats[id] = { models: [], error: e.message }
+		if (!quiet) toast(e.message, true)
+	} finally {
+		if (S.loadingCat) delete S.loadingCat[id]
+		render()
+	}
 }
 
 async function openFile(which) {
@@ -1199,9 +1646,14 @@ async function openFile(which) {
 
 // Validacion mientras se escribe, sin guardar: avisa antes de intentarlo.
 let checkTimer
-function discardDirtyFile() {
+async function discardDirtyFile() {
 	if (!S.fileDirty) return true
-	if (!confirm('Hay cambios de archivo sin guardar. ¿Descartarlos y continuar?')) return false
+	const ok = await confirmModal(
+		'Cambios sin guardar',
+		'Tienes cambios de archivo sin guardar en el editor. ¿Deseas descartarlos y continuar?',
+		{ confirmText: 'Descartar cambios', danger: true }
+	)
+	if (!ok) return false
 	clearTimeout(checkTimer)
 	S.file = null
 	S.fileProblems = []
@@ -1234,7 +1686,7 @@ async function loadGuide(id) {
 		const p = S.list.find((x) => x.id === id)
 		const m = curModel(p)
 		const guideKey = `${S.dest}:${m || 'none'}`
-		const g = await api('/api/usage', { id, target: S.dest, model: m })
+		const g = await api('/api/usage', { id, target: S.dest, model: m, effort: p?.effort || 'high' })
 		S.guides[id] = { ...(S.guides[id] || {}), [guideKey]: g, [S.dest]: g }
 		if (S.loadingGuide) delete S.loadingGuide[id + ':' + S.dest]
 		render()
@@ -1254,9 +1706,13 @@ function startScan(id, models) {
 	stopScan()
 	S.scanning = true
 	S.scanType = models ? 'sel' : 'all'
+	S.scanModels = models ? new Set(models) : null
 	S.res[id] = S.res[id] || {}
 	if (models) {
 		for (const m of models) delete S.res[id][m]
+	} else {
+		S.res[id] = {}
+		S.filter = 'all'
 	}
 	render()
 	const prog = $('#prog'), bar = prog && $('.bar2 i', prog), txt = prog && $('.t', prog)
@@ -1275,10 +1731,19 @@ function startScan(id, models) {
 	})
 	es.addEventListener('result', (e) => {
 		const r = JSON.parse(e.data)
+		S.res[id] = S.res[id] || {}
 		S.res[id][r.model] = r
+		if (S.cats[id] && Array.isArray(S.cats[id].models) && !S.cats[id].models.includes(r.model)) {
+			S.cats[id].models.push(r.model)
+		}
 		if (bar && total) bar.style.width = Math.round((r.done / total) * 100) + '%'
-		if (txt) txt.innerHTML = `[${r.done}/${total}] ${esc(r.model)} &rarr; ${resultHtml(r)}<span class="blink">_</span>`
-		renderTable()
+		if (txt && total) txt.innerHTML = `<span class="blink">●</span> Probando [${r.done}/${total}]...`
+		if (curModel(cur()) === r.model) {
+			if (r.ok) { delete S.guides[id]; loadGuide(id) }
+			render()
+		} else {
+			renderTable()
+		}
 	})
 	es.addEventListener('done', (e) => {
 		const d = JSON.parse(e.data)
@@ -1313,7 +1778,7 @@ document.addEventListener('click', async (e) => {
 	const id = pid || S.sel
 
 	if (a === 'sel') {
-		if (S.sel !== id && !discardDirtyFile()) return
+		if (S.sel !== id && !(await discardDirtyFile())) return
 		if (S.sel !== id) { S.sel = id; S.q = ''; S.picked.clear(); S.fold = {}; stopScan() }
 		S.adding = S.editing = false
 		render()
@@ -1322,15 +1787,19 @@ document.addEventListener('click', async (e) => {
 		return
 	}
 	if (a === 'add') {
-		if (!discardDirtyFile()) return
+		if (!(await discardDirtyFile())) return
 		S.adding = true; S.editing = false; render(); $('#q-l')?.focus(); return
 	}
 	if (a === 'edit') {
-		if (!discardDirtyFile()) return
+		if (!(await discardDirtyFile())) return
 		return openProviderEditor(id, el)
 	}
 	if (a === 'cancel') { S.adding = S.editing = false; S.conflict = null; render(); return }
-	if (a === 'fold') { S.fold[k] = !S.fold[k]; return render() }
+	if (a === 'fold') {
+		const curVal = S.fold[k] !== undefined ? S.fold[k] : (el.getAttribute('aria-expanded') === 'true')
+		S.fold[k] = !curVal
+		return render()
+	}
 	if (a === 'dest') {
 		S.dest = d
 		render()
@@ -1338,20 +1807,20 @@ document.addEventListener('click', async (e) => {
 		return
 	}
 	if (a === 'right') {
-		if (S.right === 'files' && d !== 'files' && !discardDirtyFile()) return
+		if (S.right === 'files' && d !== 'files' && !(await discardDirtyFile())) return
 		S.right = d
 		render()
 		if (d === 'files' && !S.file) await openFile(S.fileWhich)
 		return
 	}
 	if (a === 'file') {
-		if (!discardDirtyFile()) return
+		if (!(await discardDirtyFile())) return
 		S.right = 'files'
 		await openFile(el.dataset.w || S.fileWhich)
 		return
 	}
 	if (a === 'filereload') {
-		if (!discardDirtyFile()) return
+		if (!(await discardDirtyFile())) return
 		el.disabled = true; el.innerHTML = '<span class="blink">●</span> Recargando...'
 		return openFile(S.fileWhich)
 	}
@@ -1376,13 +1845,18 @@ document.addEventListener('click', async (e) => {
 		return
 	}
 	if (a === 'repair') {
-		if (!confirm('Reparar config.toml? Se hace copia de respaldo y no se cambia tu proveedor activo.')) return
+		const ok = await confirmModal(
+			'Reparar config.toml',
+			'¿Reparar la estructura y sintaxis de <code>config.toml</code>?<br><br>Se normalizarán claves y tablas rotas. Tu proveedor activo no será alterado y se creará una copia de respaldo automática.',
+			{ confirmText: 'Reparar archivo' }
+		)
+		if (!ok) return
 		el.disabled = true; el.innerHTML = '<span class="blink">●</span> Reparando...'
 		try {
 			const r = await api('/api/repair-config', {})
 			S.cfg = r.after
 			render()
-			toast(r.changed ? 'config.toml reparado. Respaldo hecho.' : 'No habia nada que reparar.')
+			toast(r.changed ? 'config.toml reparado. Respaldo hecho.' : 'No había nada que reparar.')
 		} catch (err) { toast(err.message, true); el.disabled = false; el.textContent = 'Reparar duplicados' }
 		return
 	}
@@ -1390,18 +1864,23 @@ document.addEventListener('click', async (e) => {
 		const c = S.cfg
 		if (!c) return
 		const detalle = [
-			c.orphans.length ? `quitar los bloques: ${c.orphans.join(', ')}` : null,
-			c.legacyTuning.length ? 'quitar los reintentos que escribio el panel antes' : null,
-		].filter(Boolean).join('\n')
-		if (!confirm(`Limpiar config.toml?\n\n${detalle}\n\nNo se toca tu proveedor activo ni tus otras secciones. Se hace respaldo.`)) return
+			c.orphans?.length ? `• Eliminar bloques no gestionados por el panel: <b>${esc(c.orphans.join(', '))}</b>` : null,
+			c.legacyTuning?.length ? `• Quitar claves obsoletas de reintento de red` : null,
+		].filter(Boolean).join('<br>')
+		const ok = await confirmModal(
+			'Limpiar config.toml',
+			`¿Deseas limpiar elementos obsoletos del archivo?<br><br>${detalle || 'Se limpiarán configuraciones obsoletas.'}<br><br><span style="color:var(--txt2);font-size:11.5px">Tu proveedor activo y otras secciones permanecen intactos. Se hace copia de respaldo automática.</span>`,
+			{ confirmText: 'Limpiar archivo' }
+		)
+		if (!ok) return
 		el.disabled = true; el.innerHTML = '<span class="blink">●</span> Limpiando...'
 		try {
-			const r = await api('/api/clean-config', { removeTables: c.orphans, removeTuning: true })
+			const r = await api('/api/clean-config', { removeTables: c.orphans || [], removeTuning: true })
 			S.cfg = r.after
 			render()
 			toast(r.changed
 				? `Limpio. Quitados: ${r.removedTables.join(', ') || '—'}${r.removedKeys.length ? ` y ${r.removedKeys.length} claves` : ''}.`
-				: 'No habia nada que limpiar.')
+				: 'El archivo ya está limpio.')
 		} catch (err) { toast(err.message, true); el.disabled = false; el.textContent = 'Limpiar' }
 		return
 	}
@@ -1417,11 +1896,19 @@ document.addEventListener('click', async (e) => {
 	if (a === 'try') {
 		S.trying = S.trying || new Set()
 		S.trying.add(m)
+		if (el && el.matches('[data-a="try"]')) {
+			el.disabled = true
+			el.innerHTML = `<span class="blink">●</span> Probando ${esc(m)}...`
+		}
 		const prog = $('#prog'), bar = prog && $('.bar2 i', prog), txt = prog && $('.t', prog)
 		if (prog) prog.hidden = false
 		if (bar) bar.style.width = '65%'
 		if (txt) txt.innerHTML = `Probando <b>${esc(m)}</b> en los protocolos disponibles <span class="blink">_</span>`
-		renderTable()
+		render()
+		setTimeout(() => {
+			const tr = document.querySelector(`tr[data-m="${CSS.escape(m)}"]`)
+			if (tr) tr.scrollIntoView({ behavior: 'smooth', block: 'center' })
+		}, 30)
 		try {
 			const t0 = Date.now()
 			const r = await api('/api/test-model', { id, model: m })
@@ -1432,12 +1919,16 @@ document.addEventListener('click', async (e) => {
 			if (txt) txt.innerHTML = `[1/1] ${esc(m)} &rarr; ${resultHtml(r)}`
 			const protocol = protocolLabel(r)
 			toast(r.ok ? `"${m}" responde${protocol ? ` por ${protocol}` : ''} (${r.ms} ms). Dale a "Usar" para activarlo.` : `"${m}": ${r.reason || 'falla'}`, !r.ok)
+			if (r.ok && curModel(cur()) === m) {
+				delete S.guides[id]
+				loadGuide(id)
+			}
 		} catch (err) {
 			if (txt) txt.innerHTML = `<span style="color:var(--mag)">Error: ${esc(err.message)}</span>`
 			toast(err.message, true)
 		} finally {
 			S.trying.delete(m)
-			renderTable()
+			render()
 			setTimeout(() => {
 				if (!S.scanning && (!S.trying || !S.trying.size)) {
 					const p = $('#prog')
@@ -1536,7 +2027,7 @@ document.addEventListener('click', async (e) => {
 		if (!p) return
 		const targetModel = m || curModel(p)
 		if (!targetModel) return toast('Selecciona un modelo primero', true)
-		const curEffort = p.effort || ''
+		const curEffort = p.effort || 'high'
 		const key = p.id + ':' + targetModel
 		S.effortTesting = S.effortTesting || {}
 		S.effortTesting[key] = true
@@ -1608,8 +2099,41 @@ document.addEventListener('click', async (e) => {
 		} catch (err) { toast(err.message, true); el.disabled = false; el.textContent = 'Usar' }
 		return
 	}
+	if (a === 'register-table') {
+		el.disabled = true; el.innerHTML = '<span class="blink">●</span> Registrando...'
+		try {
+			await api('/api/register-table', { id })
+			delete S.guides[id]
+			await refresh()
+			if (cur()?.model) loadGuide(id)
+			toast('Tabla registrada en config.toml. Ya puedes usar este proveedor en multiterminal sin alterar tu modelo por defecto.')
+		} catch (err) {
+			toast(err.message, true)
+			el.disabled = false
+			el.textContent = 'Registrar tabla en config.toml'
+		}
+		return
+	}
+	if (a === 'unset-active') {
+		el.disabled = true; el.innerHTML = '<span class="blink">●</span> Restableciendo...'
+		try {
+			await api('/api/unset-active')
+			delete S.guides[id || cur()?.id]
+			await refresh()
+			if (cur()?.model) loadGuide(id || cur()?.id)
+			toast('Proveedor desvinculado de la raíz. Codex ahora usará ChatGPT oficial por defecto.')
+		} catch (err) {
+			toast(err.message, true)
+			el.disabled = false
+			el.textContent = 'Volver a ChatGPT oficial'
+		}
+		return
+	}
 	if (a === 'filter') { S.filter = f; return render() }
-	if (a === 'scanall') return startScan(id, null)
+	if (a === 'scanall') {
+		const catModels = S.cats[id]?.models
+		return startScan(id, catModels && catModels.length ? catModels : null)
+	}
 	if (a === 'scansel') {
 		if (!S.picked.size) return toast('Marca primero los modelos que quieras probar', true)
 		return startScan(id, [...S.picked])
@@ -1626,24 +2150,47 @@ document.addEventListener('click', async (e) => {
 			await loadGuide(id)
 			const rep = r.report?.repaired
 			const fixed = (rep?.tables?.length || 0) + (rep?.keys?.length || 0) + (r.report?.relocated?.length || 0)
-			toast(fixed ? `Instalado. Ademas se limpiaron ${fixed} problema(s) que tenia tu config.toml.`
-				: 'Instalado. A la derecha tenes los 2 comandos.')
+			toast(fixed ? `Instalado. Además se corrigieron ${fixed} problema(s) que tenía tu config.toml.`
+				: 'Instalado. A la derecha tienes los 2 comandos.')
 		} catch (err) { toast(err.message, true); el.disabled = false; el.textContent = 'Instalar en Codex' }
 		return
 	}
 
 	if (a === 'applyclaude') {
-		if (!confirm('Escribir la configuracion en el settings.json de Claude Code? Se hace copia de respaldo.')) return
+		const ok = await confirmModal(
+			'Fijar en Claude Code',
+			'¿Escribir esta configuración en <code>~/.claude/settings.json</code>?<br><br>Se configurará de forma global en tu máquina, conservando los permisos en Modo YOLO y creando una copia de respaldo automática.',
+			{ confirmText: 'Escribir configuración' }
+		)
+		if (!ok) return
 		el.disabled = true; el.innerHTML = '<span class="blink">●</span> Escribiendo...'
 		try {
 			const r = await api('/api/apply-claude', { id })
+			await refresh()
+			if (cur()?.model) loadGuide(cur().id)
 			toast(`Escrito en ${r.file}${r.backedUp ? ' (respaldo hecho)' : ''}`)
 		} catch (err) { toast(err.message, true); el.disabled = false; el.textContent = 'Aplicar en settings.json' }
 		return
 	}
+	if (a === 'prepclaude') {
+		el.disabled = true; el.innerHTML = '<span class="blink">●</span> Configurando...'
+		try {
+			await api('/api/prepare-claude-multiterminal')
+			await refresh()
+			if (cur()?.model) loadGuide(cur().id)
+			toast('✓ Claude Code configurado para Multiterminal y Modo YOLO (permisos máximos sin confirmaciones).')
+		} catch (err) { toast(err.message, true); el.disabled = false; el.textContent = 'Configurar Claude para Multiterminal' }
+		return
+	}
 	if (a === 'del') {
 		const pr = S.list.find((x) => x.id === id)
-		if (!pr || !confirm(`Borrar "${pr.label}"?`)) return
+		if (!pr) return
+		const ok = await confirmModal(
+			'Eliminar proveedor',
+			`¿Estás seguro de eliminar a <b>${esc(pr.label)}</b>?<br><br><span style="color:var(--mag);font-size:11.5px">Esta acción no se puede deshacer y borrará las credenciales guardadas de este proveedor.</span>`,
+			{ confirmText: 'Eliminar proveedor', danger: true }
+		)
+		if (!ok) return
 		el.disabled = true; el.innerHTML = '<span class="blink">●</span> Borrando...'
 		try {
 			await api('/api/delete', { id })
@@ -1665,8 +2212,8 @@ document.addEventListener('click', async (e) => {
 		return
 	}
 	if (a === 'use-existing') {
-		const cid = S.conflict.conflict.id
-		S.conflict = null; S.adding = S.editing = false; S.sel = cid
+		const cid = S.conflict?.conflict?.id
+		S.conflict = null; S.adding = false; S.editing = true; S.sel = cid
 		closeModal(); render()
 		if (!S.cats[cid]) loadCat(cid, true)
 		return
@@ -1683,7 +2230,7 @@ document.addEventListener('click', async (e) => {
 			delete S.guides[r.provider.id]
 			await refresh()
 			await runTest(r.provider.id)
-		} catch (err) { toast(err.message, true); el.disabled = false; el.textContent = 'Forzar guardado' }
+		} catch (err) { toast(err.message, true); el.disabled = false; el.textContent = 'Crear cuenta separada' }
 		return
 	}
 	if (a === 'chatclear') {
@@ -1691,7 +2238,15 @@ document.addEventListener('click', async (e) => {
 		render()
 		return
 	}
-	if (a === 'closemodal') return closeModal()
+	if (a === 'closemodal' || a === 'modal-cancel') return closeModal()
+	if (a === 'modal-confirm') {
+		if (window._modalResolve) {
+			const res = window._modalResolve
+			window._modalResolve = null
+			res(true)
+		}
+		return closeModal()
+	}
 })
 
 document.addEventListener('input', (e) => {
@@ -1755,17 +2310,36 @@ document.addEventListener('submit', async (e) => {
 		S.chatMessages[key].push({ role: 'user', content: text })
 		S.chatSending = S.chatSending || {}
 		S.chatSending[key] = true
+		S.chatStarted = S.chatStarted || {}
+		S.chatStarted[key] = Date.now()
+		const CHAT_MAX_SEC = 15
 		const ctrl = new AbortController()
 		S.chatControllers = S.chatControllers || {}
 		S.chatControllers[key] = ctrl
+		let timedOut = false
+		const abortTimer = setTimeout(() => {
+			timedOut = true
+			ctrl.abort()
+		}, CHAT_MAX_SEC * 1000)
+
 		render()
 		const scrollLog = () => { const l = $('#chat-log'); if (l) l.scrollTop = l.scrollHeight }
 		scrollLog()
 
+		const timerId = setInterval(() => {
+			const el = document.getElementById('chat-timer')
+			if (!el) { clearInterval(timerId); return }
+			const sec = Math.min(CHAT_MAX_SEC, Math.max(1, Math.round((Date.now() - (S.chatStarted?.[key] || Date.now())) / 1000)))
+			el.textContent = `(${sec}s / ${CHAT_MAX_SEC}s máx${sec > 5 ? ' · esperando respuesta' : ''})`
+		}, 1000)
+
 		if (!m) {
+			clearTimeout(abortTimer)
+			clearInterval(timerId)
 			toast('Selecciona un modelo primero', true)
 			S.chatSending[key] = false
 			delete S.chatControllers[key]
+			delete S.chatStarted[key]
 			render()
 			return
 		}
@@ -1787,10 +2361,18 @@ document.addEventListener('submit', async (e) => {
 				effort: res.effort || pObj?.effort || null,
 			})
 		} catch (err) {
-			if (err.name === 'AbortError' || err.message?.includes('aborted')) return
-			delete S.chatControllers?.[key]
-			S.chatMessages[key].push({ role: 'assistant', content: `❌ Error: ${err.message}` })
+			if (timedOut) {
+				S.chatMessages[key].push({ role: 'assistant', content: '⏱️ Tiempo de espera agotado (15s máx). El servidor tardó demasiado en responder.' })
+			} else if (err.name === 'AbortError' || err.message?.includes('aborted')) {
+				return
+			} else {
+				delete S.chatControllers?.[key]
+				S.chatMessages[key].push({ role: 'assistant', content: `❌ Error: ${err.message}` })
+			}
 		} finally {
+			clearTimeout(abortTimer)
+			clearInterval(timerId)
+			delete S.chatStarted?.[key]
 			S.chatSending[key] = false
 			delete S.chatControllers?.[key]
 			render()
@@ -1811,7 +2393,7 @@ document.addEventListener('submit', async (e) => {
 		try {
 			await api('/api/provider', {
 				id: pid, label: p.label, baseUrl: p.baseUrl,
-				effort: g('effort'),
+				effort: g('effort') || 'high',
 				approvalPolicy: g('approvalPolicy'),
 				sandboxMode: g('sandboxMode'),
 				envKey: g('envKey'),
@@ -1845,9 +2427,28 @@ document.addEventListener('submit', async (e) => {
 		if (realKey && (apiKeyVal === maskKey(realKey) || !apiKeyVal)) {
 			apiKeyVal = realKey
 		}
+		const labelVal = g('label')?.value?.trim() || ''
+		if (!labelVal) {
+			toast('El nombre es obligatorio', true)
+			btn.disabled = false
+			btn.textContent = isNew ? 'Agregar y probar' : 'Guardar'
+			return
+		}
+		const cleanLabel = labelVal.toLowerCase()
+		const dup = S.list.find((p) => {
+			if (!isNew && p.id === pid) return false
+			return p.label.trim().toLowerCase() === cleanLabel || p.id === cleanLabel
+		})
+		if (dup) {
+			toast(`Ya existe un proveedor con el nombre "${dup.label}". Elige otro nombre.`, true)
+			btn.disabled = false
+			btn.textContent = isNew ? 'Agregar y probar' : 'Guardar'
+			return
+		}
+
 		const payload = {
 			id: isNew ? null : pid,
-			label: g('label')?.value?.trim() || '',
+			label: labelVal,
 			baseUrl: g('baseUrl')?.value?.trim() || '',
 			apiKey: apiKeyVal,
 			useBridge: Boolean(g('useBridge')?.checked),
@@ -1856,14 +2457,13 @@ document.addEventListener('submit', async (e) => {
 		if (r.conflict) {
 			S.conflict = { conflict: r.conflict, payload }
 			const c = r.conflict
-			modal('Ya tenes esta API', `<div class="note bad"><span class="i">!</span><div>
-				<p>${esc(c.message)}</p>
-				${c.installed ? `<p>"${esc(c.label)}" ya esta instalado${c.model ? ` con <code>${esc(c.model)}</code>` : ''}.
-					Si solo queres otro modelo, abrila y usa el panel de modelos: no hace falta otra API.</p>` : ''}
+			modal('Mismo relay detectado', `<div class="note info"><span class="i">ℹ</span><div>
+				<p>Ya tienes registrado <b>"${esc(c.label)}"</b> con esta misma URL.</p>
+				<p style="margin-top:6px;color:var(--dim);font-size:11.5px">Si estás usando una segunda clave (tu cuenta personal, la de un amigo o una cuenta secundaria), puedes guardarla como una <b>cuenta separada</b> para trabajar en paralelo en distintas terminales sin interferencias.</p>
 			</div></div>
-			<div class="row" style="margin-top:13px">
-				<button class="b go" data-a="use-existing">Abrir "${esc(c.label)}"</button>
-				<button class="b" data-a="force">Crear otra igual</button>
+			<div class="row" style="margin-top:14px;justify-content:flex-end;gap:8px">
+				<button class="b go" data-a="force">Crear cuenta separada</button>
+				<button class="b" data-a="use-existing">Editar "${esc(c.label)}" existente</button>
 				<button class="b" data-a="closemodal">Cancelar</button>
 			</div>`)
 			btn.disabled = false
@@ -1884,8 +2484,8 @@ document.addEventListener('submit', async (e) => {
 	}
 })
 
-$('#add').addEventListener('click', () => {
-	if (!discardDirtyFile()) return
+$('#add').addEventListener('click', async () => {
+	if (!(await discardDirtyFile())) return
 	S.adding = true; S.editing = false; render(); $('#q-l')?.focus()
 })
 
@@ -1912,8 +2512,8 @@ refresh()
 				S.fold.toml = true
 				render()
 				toast(!S.cfg.healthy
-					? 'Tu config.toml tiene errores que rompen a Codex. Mira "Tu config.toml".'
-					: 'Tu config.toml esta valido pero tiene cosas de sobra. Mira "Tu config.toml".', !S.cfg.healthy)
+					? 'Tu config.toml tiene errores que impiden el funcionamiento de Codex. Revisa "Tu config.toml".'
+					: 'Tu config.toml es válido pero contiene elementos innecesarios. Revisa "Tu config.toml".', !S.cfg.healthy)
 			}
 		} catch {}
 	})

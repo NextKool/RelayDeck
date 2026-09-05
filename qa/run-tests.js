@@ -557,6 +557,7 @@ async function runSyncAndActiveProviderSuite() {
 
 				const configContent = fs.readFileSync(path.join(envDirs.codexHome, 'config.toml'), 'utf8')
 				assert(configContent.includes('model = "modelo-nuevo-b"'), 'config.toml debe actualizarse con el nuevo modelo de B')
+				assert(configContent.includes('model_reasoning_effort = "high"'), 'config.toml debe tener reasoning effort en high')
 			})
 
 			await test('Editar URL o key invalida resultados anteriores; editar ajustes conserva modelResults', async () => {
@@ -749,6 +750,74 @@ async function runChatApiSuite() {
 	}
 }
 
+// ----------------------------------------------------------- 7. Multiterminal y Modo YOLO
+
+async function runMultiterminalAndYoloSuite() {
+	console.log('\n--- 7. Pruebas de Multiterminal y Modo YOLO ---')
+	const envDirs = createTempDirs()
+	const panelPort = await getFreePort()
+	let panelProc = null
+
+	try {
+		panelProc = await startPanelProcess({
+			panelPort,
+			panelHome: envDirs.panelHome,
+			codexHome: envDirs.codexHome,
+		})
+
+		await test('Nuevo proveedor default a approvalPolicy: never y sandboxMode: danger-full-access', async () => {
+			const reg = await request(`http://127.0.0.1:${panelPort}/api/provider`, {
+				method: 'POST',
+				json: { label: 'Yolo Provider', baseUrl: 'https://api.yolo.test/v1', apiKey: 'sk-yolo-key', model: 'gpt-5' },
+			})
+			assert(reg.ok, 'Debe registrar proveedor')
+			assert.strictEqual(reg.data.provider.approvalPolicy, 'never')
+			assert.strictEqual(reg.data.provider.sandboxMode, 'danger-full-access')
+
+			const inst = await request(`http://127.0.0.1:${panelPort}/api/install`, {
+				method: 'POST',
+				json: { id: 'yolo-provider' },
+			})
+			assert(inst.ok, 'Debe instalar proveedor')
+			const configContent = fs.readFileSync(path.join(envDirs.codexHome, 'config.toml'), 'utf8')
+			assert(configContent.includes('approval_policy = "never"'), 'config.toml debe tener approval_policy = never')
+			assert(configContent.includes('sandbox_mode = "danger-full-access"'), 'config.toml debe tener sandbox_mode = danger-full-access')
+		})
+
+		await test('Guías de uso generan comandos YOLO para Codex y Claude', async () => {
+			const codexGuide = await request(`http://127.0.0.1:${panelPort}/api/usage`, {
+				method: 'POST',
+				json: { id: 'yolo-provider', target: 'codex' },
+			})
+			assert(codexGuide.ok, 'Debe obtener guía Codex')
+			const codexCmds = codexGuide.data.steps.flatMap((s) => s.cmds || []).join(' ')
+			assert(codexCmds.includes('--dangerously-bypass-approvals-and-sandbox'), 'Codex debe incluir flag de bypass')
+
+			const claudeGuide = await request(`http://127.0.0.1:${panelPort}/api/usage`, {
+				method: 'POST',
+				json: { id: 'yolo-provider', target: 'claude' },
+			})
+			assert(claudeGuide.ok, 'Debe obtener guía Claude')
+			const claudeCmds = claudeGuide.data.steps.flatMap((s) => s.cmds || []).join(' ')
+			assert(claudeCmds.includes('--dangerously-skip-permissions'), 'Claude debe incluir flag de bypass')
+		})
+
+		await test('/api/prepare-claude-multiterminal limpia env y fija permisos YOLO', async () => {
+			const prep = await request(`http://127.0.0.1:${panelPort}/api/prepare-claude-multiterminal`, {
+				method: 'POST',
+			})
+			assert(prep.ok, 'Debe preparar claude multiterminal')
+			const state = await request(`http://127.0.0.1:${panelPort}/api/state`)
+			assert(state.data.claude, 'Debe devolver estado de claude')
+			assert.strictEqual(state.data.claude.isYolo, true, 'isYolo debe ser true')
+			assert.strictEqual(state.data.claude.hasProviderEnv, false, 'hasProviderEnv debe ser false tras limpieza')
+		})
+	} finally {
+		if (panelProc) panelProc.kill()
+		envDirs.cleanup()
+	}
+}
+
 // ----------------------------------------------------------- Ejecutor Principal
 
 async function main() {
@@ -764,6 +833,7 @@ async function main() {
 	await runSyncAndActiveProviderSuite()
 	await runBridgeLifecycleSuite()
 	await runChatApiSuite()
+	await runMultiterminalAndYoloSuite()
 
 	const elapsed = ((Date.now() - started) / 1000).toFixed(2)
 	console.log('\n====================================================')

@@ -15,8 +15,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Sistema
+# Sistema y temporales
 .DS_Store
 Thumbs.db
 tmp/
 dist/
+*.tmp
+*.bak
+
+# Datos locales
+providers.json

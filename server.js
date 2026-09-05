@@ -38,8 +38,8 @@ const ENV_FILE = path.join(PANEL_HOME, 'env.sh')
 const ENV_FILE_CMD = path.join(PANEL_HOME, 'env.cmd')
 const IS_WIN = os.platform() === 'win32'
 const PUBLIC_DIR = path.join(__dirname, 'public')
-// Hay relays que tardan de verdad: 20s se quedaba corto y daba falsos timeouts.
-const TIMEOUT_MS = Number(process.env.RELAYDECK_TIMEOUT_MS || process.env.CODEX_PANEL_TIMEOUT_MS || 60000)
+// Limite maximo de espera por sonda: 15 segundos para no colgar la UI.
+const TIMEOUT_MS = Number(process.env.RELAYDECK_TIMEOUT_MS || process.env.CODEX_PANEL_TIMEOUT_MS || 15000)
 // Reintentos ante 429 / 5xx, respetando Retry-After.
 const MAX_RETRIES = Number(process.env.RELAYDECK_RETRIES || process.env.CODEX_PANEL_RETRIES || 2)
 // A partir de aqui avisamos de que el proveedor va lento.
@@ -434,7 +434,7 @@ function isAmbiguous(result) {
  * Los relays usan numeros absurdos como centinela de "sin limite"
  * (p.ej. 100000000.00). Mostrarlos como saldo real es enganoso.
  */
-const UNLIMITED_THRESHOLD = Number(process.env.CODEX_PANEL_UNLIMITED_FROM || 1e6)
+const UNLIMITED_THRESHOLD = Number(process.env.CODEX_PANEL_UNLIMITED_FROM || 10000)
 function looksUnlimited(value) {
 	return typeof value === 'number' && value >= UNLIMITED_THRESHOLD
 }
@@ -588,9 +588,13 @@ async function probe(url, options = {}) {
 		try {
 			json = JSON.parse(text)
 		} catch {}
+		const hasError = Boolean(
+			json && (json.error || json.err_code || json.code === 1113 || json.type === 'upstream_error' || json.type === 'error')
+		)
+		const isOk = res.ok && !hasError
 		return {
-			ok: res.ok,
-			httpStatus: res.status,
+			ok: isOk,
+			httpStatus: isOk ? res.status : (res.status === 200 ? 400 : res.status),
 			ms: Date.now() - started,
 			text,
 			json,
@@ -611,12 +615,13 @@ async function probe(url, options = {}) {
 /** Merece reintento: limite de ritmo o caida temporal del relay. */
 function isRetryable(result) {
 	if (result.httpStatus === 429) return true
-	// Un 503 "no hay canal para este modelo" es una decision de enrutado, no
-	// una sobrecarga: reintentarlo solo gasta peticiones y falsea la latencia.
+	// Si fue timeout, no reintentar: ya espero 15s y el servidor no responde.
+	if (result.networkError === 'timeout') return false
+	// Un 503 "no hay canal para este modelo" es una decision de enrutado, no una sobrecarga.
 	if (result.httpStatus === 503 && isModelUnavailable(result)) return false
 	if (result.httpStatus >= 500 && result.httpStatus !== 501) return true
-	// Timeout o corte de conexion: puede ser un relay lento saturado.
-	return result.httpStatus === 0 && Boolean(result.networkError)
+	// Error de red inmediato (DNS/ECONNREFUSED): no reintentar.
+	return false
 }
 
 /** Segundos que pide el servidor esperar, si los dice. */
@@ -624,9 +629,9 @@ function retryAfterMs(result) {
 	const header = result.retryAfter
 	if (!header) return null
 	const seconds = Number(header)
-	if (Number.isFinite(seconds)) return Math.min(seconds * 1000, 30000)
+	if (Number.isFinite(seconds)) return Math.min(seconds * 1000, 2500)
 	const date = Date.parse(header)
-	if (!Number.isNaN(date)) return Math.min(Math.max(date - Date.now(), 0), 30000)
+	if (!Number.isNaN(date)) return Math.min(Math.max(date - Date.now(), 0), 2500)
 	return null
 }
 
@@ -784,6 +789,8 @@ function responseText(json) {
 }
 
 function apiError(result) {
+	if (result.networkError === 'timeout') return 'Tiempo de espera agotado (15s): el servidor no respondió.'
+	if (result.httpStatus === 0 && result.networkError) return `Error de red: ${result.networkError}`
 	const err = result.json?.error
 	// Algunos relays devuelven solo {error:{type:'openai_error'}} sin mensaje:
 	// mejor mostrar el codigo que un texto vacio e inutil.
@@ -901,7 +908,7 @@ async function probeBilling(baseUrl, apiKey) {
 	const used = typeof usage.json?.total_usage === 'number' ? usage.json.total_usage / 100 : null
 
 	if (granted != null || used != null) {
-		if (looksUnlimited(granted)) {
+		if (looksUnlimited(granted) || (granted != null && looksUnlimited(granted - (used || 0)))) {
 			return {
 				status: 'ok',
 				source: '/dashboard/billing',
@@ -910,9 +917,7 @@ async function probeBilling(baseUrl, apiKey) {
 				used,
 				remaining: null,
 				expiresAt: null,
-				detail: `El relay declara un limite centinela (${granted}) que significa "sin limite". Usado: ${
-					used != null ? '$' + used.toFixed(2) : 'n/d'
-				}.`,
+				detail: `El relay devuelve un límite centinela (${granted}) asignado al token. El saldo real de tu wallet no se expone por API; consúltalo en su web oficial.`,
 			}
 		}
 		return {
@@ -924,7 +929,7 @@ async function probeBilling(baseUrl, apiKey) {
 			expiresAt: sub.json?.access_until
 				? new Date(sub.json.access_until * 1000).toISOString()
 				: null,
-			detail: 'Valores no oficiales (endpoints legacy); tomalos como referencia.',
+			detail: 'Cuota técnica de la key (no refleja tu wallet real). Consúltala en la web del proveedor.',
 		}
 	}
 
@@ -932,14 +937,27 @@ async function probeBilling(baseUrl, apiKey) {
 	const grants = await probeSmart(endpoint(baseUrl, '/dashboard/billing/credit_grants'), { apiKey })
 	const g = grants.json
 	if (typeof g?.total_granted === 'number' || typeof g?.total_available === 'number') {
+		const avail = typeof g.total_available === 'number' ? g.total_available : null
+		if (looksUnlimited(avail) || looksUnlimited(g.total_granted)) {
+			return {
+				status: 'ok',
+				source: '/dashboard/billing/credit_grants',
+				unlimited: true,
+				granted: null,
+				used: typeof g.total_used === 'number' ? g.total_used : null,
+				remaining: null,
+				expiresAt: null,
+				detail: 'El relay devuelve un límite centinela. El saldo real de tu wallet no se expone por API; consúltalo en su web oficial.',
+			}
+		}
 		return {
 			status: 'ok',
 			source: '/dashboard/billing/credit_grants',
 			granted: typeof g.total_granted === 'number' ? g.total_granted : null,
 			used: typeof g.total_used === 'number' ? g.total_used : null,
-			remaining: typeof g.total_available === 'number' ? g.total_available : null,
+			remaining: avail,
 			expiresAt: null,
-			detail: 'Valores no oficiales (credit_grants); tomalos como referencia.',
+			detail: 'Cuota técnica asignada a la key (no refleja tu wallet real). Consúltala en su web oficial.',
 		}
 	}
 
@@ -984,6 +1002,7 @@ async function probeBilling(baseUrl, apiKey) {
 function classifyReason(r) {
 	if (r.ok) return null
 	if (isAuthStatus(r.httpStatus)) return 'auth'
+	if (r.networkError === 'timeout') return 'timeout'
 	if (r.httpStatus === 0) return 'sin conexion'
 	if (isModelUnavailable(r)) return 'sin canal'
 	if (isQuotaError(r)) return 'cuota agotada'
@@ -997,7 +1016,7 @@ async function sweepModels(
 	baseUrl,
 	apiKey,
 	models,
-	{ max = 40, concurrency = 3, stopOnFirst = false, onEach, shouldStop } = {},
+	{ max = 40, concurrency = 3, stopOnFirst = false, onEach, shouldStop, checkAllProtocols = false } = {},
 ) {
 	const safeMax = Math.min(Math.max(Number(max) || 1, 1), 200)
 	const safeConcurrency = Math.min(Math.max(Number(concurrency) || 1, 1), 10)
@@ -1012,13 +1031,38 @@ async function sweepModels(
 				const target = queue.shift()
 				if (!target) return
 				const round = await probeResponses(baseUrl, apiKey, target)
-				const r = round.best
+				let r = round.best
+				let targetProto = 'responses'
+				if (checkAllProtocols && !r.ok && !isAuthStatus(r.httpStatus) && r.httpStatus !== 0) {
+					const isClaude = /claude/i.test(target)
+					const [chatRes, anthRound] = await Promise.all([
+						probeChat(baseUrl, apiKey, target),
+						probeAnthropic(baseUrl, apiKey, target),
+					])
+					if (isClaude && anthRound.best.ok) {
+						r = anthRound.best
+						targetProto = 'claude'
+					} else if (chatRes.ok) {
+						r = chatRes
+						targetProto = 'chat'
+					} else if (anthRound.best.ok) {
+						r = anthRound.best
+						targetProto = 'claude'
+					}
+				}
 				const entry = {
 					model: target,
 					ok: r.ok,
 					httpStatus: r.httpStatus,
-					streams: Boolean(round.streamed?.ok),
-					detail: r.ok ? (round.target === 'claude' ? 'Responde a /v1/messages (Claude Code)' : round.target === 'chat' ? 'Responde a /v1/chat/completions (Chat)' : 'OK (/v1/responses)') : apiError(r),
+					target: targetProto,
+					streams: targetProto === 'responses' ? Boolean(round.streamed?.ok) : false,
+					detail: r.ok
+						? (targetProto === 'claude'
+							? 'Responde a /v1/messages (Claude Code)'
+							: targetProto === 'chat'
+								? 'Responde a /v1/chat/completions (Chat)'
+								: 'OK (/v1/responses)')
+						: apiError(r),
 					reason: classifyReason(r),
 					ms: r.ms,
 					round,
@@ -1026,11 +1070,6 @@ async function sweepModels(
 				results.push(entry)
 				if (onEach) onEach(entry)
 				if (r.ok && !found) found = entry
-				// Auth o red: cambiar de modelo no ayuda, cortamos el barrido.
-				if (isAuthStatus(r.httpStatus) || r.httpStatus === 0) {
-					queue.length = 0
-					return
-				}
 			}
 		}),
 	)
@@ -1280,8 +1319,8 @@ async function runTest({ baseUrl, apiKey, model }) {
 			detail: allAmbiguous
 				? `${ambiguousCount} de ${attempts.length} modelos devuelven 404 en /v1/responses. Con tantos rechazados, este relay no implementa la Responses API: no es cosa de un modelo. Usa el traductor.`
 				: onlyQuota
-					? 'La key es valida pero el presupuesto/cuota de esos modelos esta agotado. Pedi otro budget pool o elegi otro modelo.'
-					: 'El relay no tiene canal disponible para los modelos probados. Elegi a mano uno que si tenga canal.',
+					? 'La clave es válida pero la cuota de esos modelos está agotada. Solicita otro grupo de presupuesto o elige otro modelo.'
+					: 'El relay no tiene canal disponible para los modelos probados. Elige manualmente uno que sí tenga canal.',
 			models: attempts.map((a) => ({ model: a.model, httpStatus: a.httpStatus, detail: a.detail })),
 		}
 	}
@@ -1441,7 +1480,7 @@ function bridgeHeaders() {
 
 async function startBridge(provider) {
 	if (!provider.apiKey) throw new Error('Falta la API key')
-	if (!provider.model) throw new Error('Elegi un modelo antes de levantar el traductor')
+	if (!provider.model) throw new Error('Elige un modelo antes de iniciar el traductor')
 	const signature = JSON.stringify([provider.baseUrl, provider.apiKey, provider.model])
 	const existing = bridges.get(provider.id)
 	if (existing?.signature === signature) return { port: existing.port, url: existing.url, reused: true }
@@ -1542,13 +1581,12 @@ function pick(value, key, fallback = '') {
 
 function rootValues(provider) {
 	const v = { model: tomlString(provider.model), model_provider: tomlString(provider.id) }
-	// Solo lo que el usuario haya elegido explicitamente.
-	const effort = pick(provider.effort, 'model_reasoning_effort')
-	const approval = pick(provider.approvalPolicy, 'approval_policy')
-	const sandbox = pick(provider.sandboxMode, 'sandbox_mode')
-	if (effort) v.model_reasoning_effort = tomlString(effort)
-	if (approval) v.approval_policy = tomlString(approval)
-	if (sandbox) v.sandbox_mode = tomlString(sandbox)
+	const effort = pick(provider.effort || 'high', 'model_reasoning_effort') || 'high'
+	const approval = pick(provider.approvalPolicy || 'never', 'approval_policy') || 'never'
+	const sandbox = pick(provider.sandboxMode || 'danger-full-access', 'sandbox_mode') || 'danger-full-access'
+	v.model_reasoning_effort = tomlString(effort)
+	v.approval_policy = tomlString(approval)
+	v.sandbox_mode = tomlString(sandbox)
 	return v
 }
 
@@ -1658,6 +1696,64 @@ function applyToConfig(currentText, provider) {
 	return { text, report: { before, repaired, relocated, changed, kept, errors } }
 }
 
+function registerInConfig(currentText, provider) {
+	const doc = new TomlDoc(currentText)
+	const before = {
+		problems: doc.problems(),
+		activeProvider: stripQuotes(doc.get(null, 'model_provider')),
+		activeModel: stripQuotes(doc.get(null, 'model')),
+		tables: doc.tables(),
+	}
+	const repaired = doc.repair()
+	const relocated = relocateStrayRootKeys(doc)
+	doc.stripComments(OLD_MARKERS)
+
+	const table = `model_providers.${provider.id}`
+	const pv = providerValues(provider)
+	const changed = []
+	const kept = []
+
+	for (const key of PROVIDER_KEYS) {
+		if (pv[key] === undefined) continue
+		const old = doc.get(table, key)
+		if (old !== pv[key]) changed.push({ table, key, from: old, to: pv[key] })
+		doc.set(table, key, pv[key])
+	}
+
+	for (const key of RETRY_KEYS) {
+		const old = doc.get(table, key)
+		if (old !== null) {
+			changed.push({ table, key, from: old, to: '(quitado)' })
+			doc.remove(table, key)
+		}
+	}
+	const tblBlock = doc.blocksOf(table)[0]
+	if (tblBlock) {
+		for (const [key] of doc.entries(tblBlock)) {
+			if (!PROVIDER_KEYS.includes(key) && !RETRY_KEYS.includes(key)) kept.push({ table, key })
+		}
+	}
+
+	const text = doc.toString()
+	const errors = validate(text)
+	return { text, report: { before, repaired, relocated, changed, kept, errors } }
+}
+
+function unsetActiveFromConfig(currentText) {
+	const doc = new TomlDoc(currentText)
+	doc.repair()
+	relocateStrayRootKeys(doc)
+	doc.stripComments(OLD_MARKERS)
+
+	for (const key of ['model_provider', 'model', 'model_reasoning_effort']) {
+		doc.remove(null, key)
+	}
+
+	const text = doc.toString()
+	const errors = validate(text)
+	return { text, errors }
+}
+
 function removeFromConfig(currentText, provider) {
 	const doc = new TomlDoc(currentText)
 	doc.repair()
@@ -1738,9 +1834,6 @@ function inspectConfig() {
 	}
 
 	const warnings = []
-	for (const d of duplicateRelays) {
-		warnings.push(`${d.ids.length} bloques distintos (${d.ids.join(', ')}) apuntan al mismo relay ${d.url}`)
-	}
 	if (orphans.length) warnings.push(`${orphans.length} bloque(s) que el panel ya no gestiona: ${orphans.join(', ')}`)
 	for (const l of legacyTuning) {
 		warnings.push(`[${l.table}] tiene ${l.keys.join(', ')} que escribio una version anterior del panel`)
@@ -1777,7 +1870,10 @@ function inspectConfig() {
 function syncWithConfig(providers) {
 	const text = readConfig()
 	if (!text) {
-		for (const p of providers) p.installed = false
+		for (const p of providers) {
+			p.installed = false
+			p.inConfig = false
+		}
 		return providers
 	}
 	const doc = new TomlDoc(text)
@@ -1790,6 +1886,7 @@ function syncWithConfig(providers) {
 	for (const p of providers) {
 		const table = `model_providers.${p.id}`
 		const hasTable = doc.tables().includes(table)
+		p.inConfig = hasTable
 		p.installed = Boolean(hasTable && activeProvider === p.id)
 		if (hasTable) {
 			const tableEnv = stripQuotes(doc.get(table, 'env_key'))
@@ -1974,19 +2071,29 @@ function usageGuide(provider, target = 'codex') {
 		: '~/.claude/settings.json'
 
 	if (target === 'claude') {
-		// Claude Code no lee config.toml: se configura por su settings.json o
-		// por variables de entorno de la terminal.
-		const json = JSON.stringify(
-			{
-				env: {
-					ANTHROPIC_BASE_URL: claudeBaseUrl,
-					ANTHROPIC_AUTH_TOKEN: keyVal,
-					ANTHROPIC_MODEL: provider.model || '<modelo>',
-				},
+		const claudeFile = path.join(os.homedir(), '.claude', 'settings.json')
+		let currentSettings = {}
+		try {
+			if (fs.existsSync(claudeFile)) currentSettings = JSON.parse(fs.readFileSync(claudeFile, 'utf8'))
+		} catch {}
+
+		const mergedPreview = {
+			...currentSettings,
+			env: {
+				...(currentSettings.env || {}),
+				ANTHROPIC_BASE_URL: claudeBaseUrl,
+				ANTHROPIC_AUTH_TOKEN: keyVal,
+				ANTHROPIC_MODEL: provider.model || '<modelo>',
 			},
-			null,
-			2,
-		)
+			permissions: currentSettings.permissions || {
+				defaultMode: 'bypassPermissions',
+				allow: ['Bash'],
+			},
+			skipDangerousModePermissionPrompt: currentSettings.skipDangerousModePermissionPrompt ?? true,
+		}
+		const json = JSON.stringify(mergedPreview, null, 2)
+		const effortVal = provider.effort || 'high'
+		const effortFlag = effortVal ? ` --effort ${effortVal}` : ''
 		return {
 			target: 'claude',
 			label: 'Claude Code',
@@ -2000,7 +2107,7 @@ function usageGuide(provider, target = 'codex') {
 						setVar('ANTHROPIC_BASE_URL', claudeBaseUrl),
 						setVar('ANTHROPIC_AUTH_TOKEN', keyVal),
 						setVar('ANTHROPIC_MODEL', provider.model || '<modelo>'),
-						'claude',
+						`claude --dangerously-skip-permissions${effortFlag}`,
 					],
 					detail: 'Dónde ejecutar: En una misma ventana de terminal.',
 				},
@@ -2017,7 +2124,7 @@ function usageGuide(provider, target = 'codex') {
 			],
 			notes: [
 				'Si el relay te dio una "api key" en vez de un "bearer token", usa ANTHROPIC_API_KEY en lugar de ANTHROPIC_AUTH_TOKEN.',
-				'Si pones las dos cosas, gana lo del settings.json.',
+				'Prioridad de Claude Code: Si tu settings.json tiene variables de proveedor en "env", Claude Code siempre las prioriza y anula las de la terminal. Usa "Configurar Claude para Multiterminal" para mantener "env" limpio y el Modo YOLO activo.',
 			],
 		}
 	}
@@ -2053,8 +2160,9 @@ function usageGuide(provider, target = 'codex') {
 	const inConfig = configEnvKey(provider.id)
 	const envKey = inConfig || provider.envKey || ENV_KEY
 	const modelName = provider.model || '<modelo>'
-	const effortParam = provider.effort ? ` -c model_reasoning_effort="${provider.effort}"` : ''
-	const runCmd = `codex -c model_provider="${provider.id}" -c model="${modelName}"${effortParam}`
+	const effortVal = provider.effort || 'high'
+	const effortParam = ` -c model_reasoning_effort="${effortVal}"`
+	const runCmd = `codex --dangerously-bypass-approvals-and-sandbox -c model_provider="${provider.id}" -c model="${modelName}"${effortParam}`
 
 	const steps = [
 		{
@@ -2083,7 +2191,7 @@ function usageGuide(provider, target = 'codex') {
 	steps.push({
 		title: 'Arranca Codex fijando este modelo',
 		cmds: [runCmd],
-		detail: `Ejecuta este comando para arrancar directamente en tu terminal con "${modelName}"${provider.effort ? ` (razonamiento: ${provider.effort})` : ''}. Te permite abrir múltiples terminales con diferentes modelos o proveedores en paralelo.`,
+		detail: `Ejecuta este comando para arrancar directamente en tu terminal con "${modelName}" en Modo YOLO sin confirmaciones (razonamiento: ${effortVal}). Te permite abrir múltiples terminales con diferentes modelos o proveedores en paralelo.`,
 	})
 	steps.push({
 		title: 'Resultado esperado',
@@ -2213,7 +2321,7 @@ function serveStatic(req, res) {
 function readClaudeConfig() {
 	try {
 		const file = path.join(os.homedir(), '.claude', 'settings.json')
-		if (!fs.existsSync(file)) return null
+		if (!fs.existsSync(file)) return { exists: false, hasProviderEnv: false, isYolo: false, baseUrl: '', model: '', apiKey: '' }
 		const json = JSON.parse(fs.readFileSync(file, 'utf8'))
 		const env = json?.env || {}
 		const baseUrl = env.ANTHROPIC_BASE_URL || ''
@@ -2224,9 +2332,30 @@ function readClaudeConfig() {
 			env.ANTHROPIC_DEFAULT_HAIKU_MODEL ||
 			''
 		const apiKey = env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY || ''
-		return { exists: Boolean(baseUrl || model || apiKey), baseUrl, model, apiKey }
+		const hasProviderEnv = Boolean(
+			baseUrl ||
+			apiKey ||
+			env.ANTHROPIC_MODEL ||
+			env.ANTHROPIC_DEFAULT_OPUS_MODEL ||
+			env.ANTHROPIC_DEFAULT_SONNET_MODEL ||
+			env.ANTHROPIC_DEFAULT_HAIKU_MODEL
+		)
+		const isYolo =
+			json?.permissions?.defaultMode === 'bypassPermissions' &&
+			json?.skipDangerousModePermissionPrompt === true
+		return {
+			exists: true,
+			hasProviderEnv,
+			isYolo,
+			baseUrl,
+			model,
+			apiKey,
+			opusModel: env.ANTHROPIC_DEFAULT_OPUS_MODEL || '',
+			sonnetModel: env.ANTHROPIC_DEFAULT_SONNET_MODEL || '',
+			haikuModel: env.ANTHROPIC_DEFAULT_HAIKU_MODEL || '',
+		}
 	} catch {
-		return null
+		return { exists: false, hasProviderEnv: false, isYolo: false, baseUrl: '', model: '', apiKey: '' }
 	}
 }
 
@@ -2265,7 +2394,12 @@ const routes = {
 		const providers = syncWithConfig(storedProviders)
 		let storeChanged = providers.some((p) => p.installed !== installedBefore.get(p.id))
 		for (const provider of providers) {
-			if (!provider.installed || !provider.useBridge || !provider.model) continue
+			const needsBridge = provider.useBridge || provider.lastTest?.verdict === 'chat_only' || provider.lastTest?.verdict === 'no_responses' || (provider.model && provider.modelResults?.[provider.model] && provider.modelResults[provider.model].target !== 'responses')
+			if (!provider.installed || !needsBridge || !provider.model) continue
+			if (!provider.useBridge) {
+				provider.useBridge = true
+				storeChanged = true
+			}
 			const bridge = await startBridge(provider)
 			if (provider.bridgePort !== bridge.port) {
 				provider.bridgePort = bridge.port
@@ -2347,81 +2481,100 @@ const routes = {
 						.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content) })),
 				},
 			})
-			if (anthRes.ok) {
+			if (anthRes.ok && !anthRes.json?.error) {
 				const contentArr = anthRes.json?.content || []
-				const replyText = contentArr.map((c) => (typeof c === 'string' ? c : c.text || '')).join('') || anthRes.text
-				return {
-					ok: true,
-					model,
-					protocol: 'anthropic',
-					ms: Date.now() - started,
-					retries: anthRes.retries || 0,
-					reply: replyText,
+				const replyText = contentArr.map((c) => (typeof c === 'string' ? c : c.text || '')).join('').trim()
+				if (replyText) {
+					return {
+						ok: true,
+						model,
+						protocol: 'anthropic',
+						ms: Date.now() - started,
+						retries: anthRes.retries || 0,
+						reply: replyText,
+					}
 				}
 			}
 		}
 
-		const effort = body.effort || stored?.effort || undefined
+		const CHAT_MAX_MS = 14500
+		const remaining = () => CHAT_MAX_MS - (Date.now() - started)
+
+		const effort = body.effort || stored?.effort || 'high'
 
 		// 2. Probar OpenAI /chat/completions
-		const chatPayload = {
-			model,
-			messages: messages.map((m) => ({ role: m.role, content: String(m.content) })),
-			max_tokens: 1024,
-			stream: false,
-		}
-		if (effort) chatPayload.reasoning_effort = effort
-
-		const chatRes = await probeSmart(endpoint(baseUrl, '/chat/completions'), {
-			apiKey,
-			method: 'POST',
-			json: chatPayload,
-		})
-		if (chatRes.ok) {
-			const replyText = chatRes.json?.choices?.[0]?.message?.content || chatRes.text
-			return {
-				ok: true,
+		let chatRes = null
+		if (remaining() >= 2000) {
+			const chatPayload = {
 				model,
-				protocol: 'chat',
-				ms: Date.now() - started,
-				retries: chatRes.retries || 0,
-				reply: replyText,
-				effort: effort || null,
+				messages: messages.map((m) => ({ role: m.role, content: String(m.content) })),
+				max_tokens: 1024,
+				stream: false,
+			}
+			if (effort) chatPayload.reasoning_effort = effort
+
+			chatRes = await probeSmart(endpoint(baseUrl, '/chat/completions'), {
+				apiKey,
+				method: 'POST',
+				json: chatPayload,
+			})
+			if (chatRes.ok && !chatRes.json?.error) {
+				const replyText = (chatRes.json?.choices?.[0]?.message?.content || '').trim()
+				if (replyText) {
+					return {
+						ok: true,
+						model,
+						protocol: 'chat',
+						ms: Date.now() - started,
+						retries: chatRes.retries || 0,
+						reply: replyText,
+						effort: effort || null,
+					}
+				}
 			}
 		}
 
 		// 3. Probar /responses conservando el historial completo.
-		const respPayload = {
-			model,
-			input: messages.map((m) => ({
-				role: ['assistant', 'system'].includes(m.role) ? m.role : 'user',
-				content: String(m.content),
-			})),
-			max_output_tokens: 1024,
-			stream: false,
-		}
-		if (effort) respPayload.reasoning_effort = effort
-
-		const respRes = await probeSmart(endpoint(baseUrl, '/responses'), {
-			apiKey,
-			method: 'POST',
-			json: respPayload,
-		})
-		if (respRes.ok) {
-			const replyText = responseText(respRes.json) || respRes.text
-			return {
-				ok: true,
+		let respRes = null
+		if (remaining() >= 2000) {
+			const respPayload = {
 				model,
-				protocol: 'responses',
-				ms: Date.now() - started,
-				retries: respRes.retries || 0,
-				reply: replyText,
-				effort: effort || null,
+				input: messages.map((m) => ({
+					role: ['assistant', 'system'].includes(m.role) ? m.role : 'user',
+					content: String(m.content),
+				})),
+				max_output_tokens: 1024,
+				stream: false,
+			}
+			if (effort) respPayload.reasoning_effort = effort
+
+			respRes = await probeSmart(endpoint(baseUrl, '/responses'), {
+				apiKey,
+				method: 'POST',
+				json: respPayload,
+			})
+			if (respRes.ok && !respRes.json?.error) {
+				const replyText = (responseText(respRes.json) || '').trim()
+				if (replyText) {
+					return {
+						ok: true,
+						model,
+						protocol: 'responses',
+						ms: Date.now() - started,
+						retries: respRes.retries || 0,
+						reply: replyText,
+						effort: effort || null,
+					}
+				}
 			}
 		}
 
-		const failed = isClaude && anthRes ? anthRes : (chatRes.httpStatus ? chatRes : respRes)
-		throw new Error(apiError(failed) || `Error al consultar el modelo (HTTP ${failed.httpStatus})`)
+		if (Date.now() - started >= 14000) {
+			throw new Error('Tiempo de espera agotado (15s máx). El relay tardó demasiado en responder.')
+		}
+
+		const failed = isClaude && anthRes ? anthRes : (chatRes?.httpStatus ? chatRes : (respRes || anthRes || chatRes))
+		throw new Error(apiError(failed) || `Error al consultar el modelo (HTTP ${failed?.httpStatus || 504})`)
 	},
 
 	'POST /api/test': async (body) => {
@@ -2448,7 +2601,6 @@ const routes = {
 			const chosenModel = stored.model || report.testedModel || ''
 			const updated = {
 				...stored,
-				// Si el provider no tenia modelo, adoptamos el que se comprobo en la prueba.
 				model: chosenModel,
 				useBridge: needsBridge ? true : stored.useBridge,
 				slow: Boolean(report.slow),
@@ -2500,10 +2652,26 @@ const routes = {
 		if (body.apiKey) assertSecret(body.apiKey)
 
 		const providers = readStore()
-		const id = slug(body.id || body.label)
+		const targetLabel = String(body.label || '').trim()
+		if (!targetLabel) throw new Error('El nombre es obligatorio')
+
+		const isNew = !body.id
+		const cleanTarget = targetLabel.toLowerCase()
+		const targetSlug = slug(targetLabel)
+		const id = isNew ? targetSlug : slug(body.id)
 		if (!id) throw new Error('Nombre invalido')
 
-		const index = providers.findIndex((p) => p.id === id)
+		// No permitir nombres duplicados (case-insensitive)
+		const duplicate = providers.find((p) => {
+			if (!isNew && p.id === body.id) return false
+			return p.label.trim().toLowerCase() === cleanTarget || slug(p.label) === targetSlug || p.id === targetSlug
+		})
+
+		if (duplicate) {
+			throw new Error(`Ya existe un proveedor con el nombre "${duplicate.label}". Elige otro nombre.`)
+		}
+
+		const index = isNew ? -1 : providers.findIndex((p) => p.id === body.id)
 		const previous = index >= 0 ? providers[index] : null
 		const baseUrl = body.baseUrl.trim().replace(/\/+$/, '')
 
@@ -2519,7 +2687,7 @@ const routes = {
 						label: twin.label,
 						installed: Boolean(twin.installed),
 						model: twin.model || null,
-						message: `Ya tenes "${twin.label}" apuntando a este mismo relay. Si creas otro, los dos escriben en config.toml y se pisan.`,
+						message: `Ya tienes registrado "${twin.label}" con esta misma URL. Puedes guardarla como una cuenta separada para usar en distintas terminales o editar la existente.`,
 					},
 				}
 			}
@@ -2549,15 +2717,13 @@ const routes = {
 			// Editable: si tu config.toml ya usa otro nombre, puedes ponerlo aqui.
 			envKey,
 			// Ajustes seguros por defecto para proveedores nuevos.
-			effort: body.effort !== undefined ? pick(body.effort, 'model_reasoning_effort') : previous?.effort ?? '',
-			approvalPolicy:
-				body.approvalPolicy !== undefined
-					? pick(body.approvalPolicy, 'approval_policy')
-					: previous?.approvalPolicy ?? 'on-request',
-			sandboxMode:
-				body.sandboxMode !== undefined
-					? pick(body.sandboxMode, 'sandbox_mode')
-					: previous?.sandboxMode ?? 'workspace-write',
+			effort: body.effort ? (pick(body.effort, 'model_reasoning_effort') || 'high') : (previous?.effort || 'high'),
+			approvalPolicy: body.approvalPolicy
+				? pick(body.approvalPolicy, 'approval_policy')
+				: (previous?.approvalPolicy || 'never'),
+			sandboxMode: body.sandboxMode
+				? pick(body.sandboxMode, 'sandbox_mode')
+				: (previous?.sandboxMode || 'danger-full-access'),
 			useBridge: body.useBridge === true || (body.useBridge === undefined && previous?.useBridge === true),
 			slow: body.slow === true || (body.slow === undefined && previous?.slow === true),
 			bridgePort: previous?.bridgePort || null,
@@ -2605,6 +2771,7 @@ const routes = {
 		const { results: swept } = await sweepModels(baseUrl, apiKey, pool, {
 			max: Number(body.limit) || SCAN_MAX,
 			concurrency: 3,
+			checkAllProtocols: true,
 		})
 		const results = swept.map(({ round, ...rest }) => ({
 			...rest,
@@ -2635,11 +2802,15 @@ const routes = {
 		let r = round.best
 		let target = 'responses'
 		if (!r.ok && !isAuthStatus(r.httpStatus) && r.httpStatus !== 0) {
+			const isClaude = /claude/i.test(body.model)
 			const [chatRes, anthRound] = await Promise.all([
 				probeChat(baseUrl, apiKey, body.model),
 				probeAnthropic(baseUrl, apiKey, body.model),
 			])
-			if (chatRes.ok) {
+			if (isClaude && anthRound.best.ok) {
+				r = anthRound.best
+				target = 'claude'
+			} else if (chatRes.ok) {
 				r = chatRes
 				target = 'chat'
 			} else if (anthRound.best.ok) {
@@ -2687,6 +2858,9 @@ const routes = {
 		const provider = { ...providers[index], model: String(body.model || '').trim() }
 		providers[index] = provider
 
+		const needsBridge = provider.useBridge || provider.lastTest?.verdict === 'chat_only' || provider.lastTest?.verdict === 'no_responses' || (provider.model && provider.modelResults?.[provider.model] && provider.modelResults[provider.model].target !== 'responses')
+		if (needsBridge) provider.useBridge = true
+
 		let reapplied = false
 		const active = stripQuotes(new TomlDoc(readConfig()).get(null, 'model_provider')) === provider.id
 		if (active && provider.model) {
@@ -2711,7 +2885,7 @@ const routes = {
 		const index = providers.findIndex((p) => p.id === body.id)
 		if (index < 0) throw new Error('Provider desconocido')
 
-		const effort = pick(body.effort || '', 'model_reasoning_effort')
+		const effort = pick(body.effort || 'high', 'model_reasoning_effort') || 'high'
 		const provider = { ...providers[index], effort }
 		providers[index] = provider
 
@@ -2735,7 +2909,7 @@ const routes = {
 		if (!p) throw new Error('Proveedor no encontrado')
 		const model = String(body.model || p.model || '').trim()
 		if (!model) throw new Error('Falta el modelo')
-		const effort = String(body.effort || '').trim()
+		const effort = String(body.effort || p.effort || 'high').trim()
 		const apiKey = p.apiKey
 		const baseUrl = p.baseUrl
 		const started = Date.now()
@@ -2830,7 +3004,11 @@ const routes = {
 		const provider = providers.find((p) => p.id === body.id)
 		if (!provider) throw new Error('Provider desconocido')
 		const target = ['codex', 'claude', 'curl'].includes(body.target) ? body.target : 'codex'
-		const effProvider = body.model ? { ...provider, model: body.model } : provider
+		const effProvider = {
+			...provider,
+			...(body.model ? { model: body.model } : {}),
+			...(body.effort !== undefined ? { effort: body.effort } : {}),
+		}
 		return usageGuide(effProvider, target)
 	},
 
@@ -2839,7 +3017,7 @@ const routes = {
 		const providers = readStore()
 		const provider = providers.find((p) => p.id === body.id)
 		if (!provider) throw new Error('Provider desconocido')
-		if (!provider.model) throw new Error('Elegi un modelo primero')
+		if (!provider.model) throw new Error('Elige un modelo primero')
 		if (!provider.apiKey) throw new Error('Falta la API key')
 
 		const dir = path.join(os.homedir(), '.claude')
@@ -2867,8 +3045,57 @@ const routes = {
 			ANTHROPIC_AUTH_TOKEN: provider.apiKey,
 			ANTHROPIC_MODEL: provider.model,
 		}
+		if (!current.permissions) {
+			current.permissions = { defaultMode: 'bypassPermissions', allow: ['Bash'] }
+		}
+		if (current.skipDangerousModePermissionPrompt === undefined) {
+			current.skipDangerousModePermissionPrompt = true
+		}
 		atomicWrite(file, JSON.stringify(current, null, 2) + '\n')
 		return { file, backedUp: hadFile, env: Object.keys(current.env) }
+	},
+
+	/** Prepara settings.json de Claude Code para modo multiterminal (limpia env de proveedores y fija modo YOLO). */
+	'POST /api/prepare-claude-multiterminal': async () => {
+		const dir = path.join(os.homedir(), '.claude')
+		const file = path.join(dir, 'settings.json')
+		fs.mkdirSync(dir, { recursive: true })
+
+		let current = {}
+		const hadFile = fs.existsSync(file)
+		if (hadFile) {
+			try {
+				current = JSON.parse(fs.readFileSync(file, 'utf8'))
+			} catch {
+				throw new Error('Tu settings.json de Claude Code no es JSON valido. Arreglalo o borralo antes.')
+			}
+			if (!current || typeof current !== 'object' || Array.isArray(current)) {
+				throw new Error('Tu settings.json de Claude Code debe contener un objeto JSON')
+			}
+			backupFile(file)
+		}
+
+		const env = current.env && typeof current.env === 'object' && !Array.isArray(current.env) ? { ...current.env } : {}
+		delete env.ANTHROPIC_BASE_URL
+		delete env.ANTHROPIC_AUTH_TOKEN
+		delete env.ANTHROPIC_API_KEY
+		delete env.ANTHROPIC_MODEL
+		delete env.ANTHROPIC_DEFAULT_OPUS_MODEL
+		delete env.ANTHROPIC_DEFAULT_SONNET_MODEL
+		delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL
+
+		if (env.DISABLE_TELEMETRY === undefined) env.DISABLE_TELEMETRY = '1'
+		if (env.DISABLE_AUTOUPDATER === undefined) env.DISABLE_AUTOUPDATER = '1'
+
+		current.env = env
+		current.permissions = {
+			defaultMode: 'bypassPermissions',
+			allow: ['Bash'],
+		}
+		current.skipDangerousModePermissionPrompt = true
+
+		atomicWrite(file, JSON.stringify(current, null, 2) + '\n')
+		return { ok: true, file, backedUp: hadFile }
 	},
 
 	/**
@@ -2973,7 +3200,7 @@ const routes = {
 		const providers = readStore()
 		const provider = providers.find((p) => p.id === body.id)
 		if (!provider) throw new Error('Provider desconocido')
-		if (!provider.model) throw new Error('Elegi un modelo antes')
+		if (!provider.model) throw new Error('Elige un modelo antes')
 		const { text, report } = applyToConfig(readConfig(), provider)
 		return { report, preview: text, path: CONFIG_PATH() }
 	},
@@ -2983,8 +3210,11 @@ const routes = {
 		const index = providers.findIndex((p) => p.id === body.id)
 		if (index < 0) throw new Error('Provider desconocido')
 		const provider = providers[index]
-		if (!provider.model) throw new Error('Elegi un modelo antes de instalar')
+		if (!provider.model) throw new Error('Elige un modelo antes de instalar')
 		if (!provider.apiKey) throw new Error('Falta la API key')
+
+		const needsBridge = provider.useBridge || provider.lastTest?.verdict === 'chat_only' || provider.lastTest?.verdict === 'no_responses' || (provider.model && provider.modelResults?.[provider.model] && provider.modelResults[provider.model].target !== 'responses')
+		if (needsBridge) provider.useBridge = true
 
 		// Si va por traductor, hay que levantarlo antes de escribir la config:
 		// el puerto real es el que acaba en base_url.
@@ -3013,6 +3243,64 @@ const routes = {
 			usage: usageGuide(provider),
 			command: launchCommand(provider),
 		}
+	},
+
+	/** Registra la tabla del proveedor en config.toml para multiterminal SIN tocar la raíz. */
+	'POST /api/register-table': async (body) => {
+		const providers = readStore()
+		const index = providers.findIndex((p) => p.id === body.id)
+		if (index < 0) throw new Error('Provider desconocido')
+
+		const provider = { ...providers[index] }
+		const configPath = CONFIG_PATH()
+		const current = readConfig()
+
+		if (provider.useBridge) {
+			const bridge = await startBridge(provider)
+			provider.bridgePort = bridge.port
+		}
+
+		const { text, report } = registerInConfig(current, provider)
+		if (report.errors.length) {
+			throw new Error('El config.toml resultante seria invalido: ' + report.errors.join('; '))
+		}
+
+		if (text !== current) {
+			if (current) backupConfig()
+			atomicWrite(configPath, text)
+		}
+
+		provider.inConfig = true
+		providers[index] = provider
+		writeStore(providers)
+		return {
+			configPath,
+			report,
+			config: inspectConfig(),
+			provider: publicView(provider),
+			unchanged: text === current,
+		}
+	},
+
+	/** Desvincula el proveedor activo de la raíz para volver al ChatGPT oficial por defecto. */
+	'POST /api/unset-active': async () => {
+		const configPath = CONFIG_PATH()
+		const current = readConfig()
+		if (!current) return { unchanged: true }
+
+		const { text, errors } = unsetActiveFromConfig(current)
+		if (errors.length) throw new Error('El config.toml resultante seria invalido: ' + errors.join('; '))
+
+		if (text !== current) {
+			backupConfig()
+			atomicWrite(configPath, text)
+		}
+
+		const providers = readStore()
+		for (const p of providers) p.installed = false
+		writeStore(providers)
+
+		return { configPath, config: inspectConfig(), unchanged: text === current }
 	},
 
 	/** Levanta el traductor Chat->Responses para un provider solo-chat. */
@@ -3152,6 +3440,7 @@ async function handleScanStream(req, res, query) {
 			max,
 			concurrency: Math.min(Math.max(Number(query.get('concurrency')) || 3, 1), 10),
 			shouldStop: () => aborted,
+			checkAllProtocols: true,
 			onEach: (entry) => {
 				if (aborted) return
 				const { round, ...rest } = entry
@@ -3163,13 +3452,14 @@ async function handleScanStream(req, res, query) {
 			const currentProviders = readStore()
 			const pIdx = currentProviders.findIndex((p) => p.id === query.get('id'))
 			if (pIdx >= 0) {
-				const existing = { ...(currentProviders[pIdx].modelResults || {}) }
+				const existing = query.has('models') ? { ...(currentProviders[pIdx].modelResults || {}) } : {}
 				for (const r of results) {
 					existing[r.model] = {
 						model: r.model,
 						ok: r.ok,
 						httpStatus: r.httpStatus,
 						ms: r.ms,
+						target: r.target,
 						reason: r.reason,
 						detail: r.detail,
 					}

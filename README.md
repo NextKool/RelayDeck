@@ -40,6 +40,10 @@ clic y siempre se ve cual esta seleccionada.
 | **Modelos de X** | buscador, filtros, y probar los modelos que **tu** elijas (uno, una seleccion, o todos) |
 | **Usar en** | las instrucciones exactas, con pestañas: **Codex CLI**, **Claude Code**, **Probar a mano** |
 
+<p align="center">
+  <img src="preview-models.png" alt="Explorador y Diagnóstico de Modelos" width="100%" />
+</p>
+
 Lo tecnico (diagnostico, TOML generado) esta plegado. Se abre solo si lo pides.
 
 ## Como se usa una API despues de probarla
@@ -198,7 +202,7 @@ Por debajo, "Probar API" es bastante mas que un ping:
    mensaje no cierra el caso: puede ser ese modelo y no el endpoint.
 4. **Distingue el tipo de fallo**: key revocada, cliente bloqueado, modelo sin canal, cuota
    agotada, modelo retirado (410), relay lento o con limite de ritmo.
-5. **Lee el saldo** si el relay lo expone (endpoints legacy, `credit_grants`, o `/api/user/self`).
+5. **Verificación de cuota y saldo**: Detecta si el relay expone endpoints de cuota y filtra límites centinela ficticios (como $99M o cuotas de grupo) para evitar confusiones con tu saldo real de billetera.
 
 ## Protocolos y compatibilidad
 
@@ -280,7 +284,7 @@ Registralo con cualquier key que empiece por `sk-`.
 | `toml-edit.js` | Editor estructural de TOML: lee y edita en su sitio, sin duplicar tablas |
 | `public/index.html` | La interfaz gráfica de usuario en tiempo real (cero dependencias) |
 | `qa/fake-provider.js` | Relay falso para pruebas de integración |
-| `qa/run-tests.js` | Suite completa de pruebas automatizadas (41/41 tests) |
-| `LICENSE` | Licencia de código abierto MIT (NextKool 2026) |
+| `qa/run-tests.js` | Suite completa de pruebas automatizadas (44/44 tests) |
+| `LICENSE` | Licencia de código abierto GNU GPLv3 (NextKool 2026) |
 
 > **Nota de seguridad sobre tus claves:** En tu carpeta local de usuario (`~/.relaydeck/`) se guardan `providers.json` y `env.cmd` con tus API keys reales para que el panel las recuerde entre sesiones. **Nunca compartas ni subas esos archivos a GitHub**, ya que contienen tus claves de pago privadas. El `.gitignore` del proyecto los protege por defecto.
