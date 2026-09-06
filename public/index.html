@@ -1108,7 +1108,7 @@ function tableHtml(p) {
 				El relay no devolvió modelos en su catálogo
 			</div>
 			<div style="font-size:11.5px;color:var(--dim);max-width:440px;line-height:1.55">
-				El endpoint <code>/v1/models</code> de <b>${esc(p.label)}</b> respondió exitosamente pero con una lista vacía de modelos. No se ha aplicado ningún filtro de búsqueda.
+				El endpoint <code>/v1/models</code> de <b>${esc(p.label)}</b> respondió con una lista vacía (0 modelos).
 			</div>
 			${p.model ? `
 				<div style="font-size:11.5px;color:var(--txt2);margin-top:2px">
