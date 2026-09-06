@@ -1217,17 +1217,23 @@ function paneModels(p) {
 
 	return `<section class="pane grow">
 		<h2>Modelos disponibles<span class="sp"></span><span class="tag ok" style="margin-right:6px">Proveedor: ${esc(p.label)}</span>${active ? tag('info', 'Elegido: ' + active) : tag('idle', 'Sin modelo')}</h2>
-		<div class="mbar">
-			<div class="s"><input type="search" data-a="q" value="${esc(S.q)}"
-				placeholder="${!totalModels && !isLoading ? 'Relay sin modelos en catálogo' : 'buscar: gpt, codex, claude...'}" aria-label="Buscar modelo" ${isLoading || (!totalModels && !isLoading) ? 'disabled' : ''} /></div>
-			<div class="chips" id="mchips">${chipsHtml(p)}</div>
-			<div class="row">
-				<button class="b xs" data-a="cat" data-p="${esc(p.id)}" ${isLoading ? 'disabled' : ''}>${isLoading ? '<span class="blink">●</span> Cargando...' : 'Recargar'}</button>
-				<button class="b xs go" data-a="scanall" data-p="${esc(p.id)}" ${S.scanning || isLoading || (!totalModels && !isLoading) ? 'disabled' : ''}>${
-					S.scanning ? '<span class="blink">●</span> Probando todos...' : 'Probar todos'
-				}</button>
-				${S.scanning ? `<button class="b xs ko" data-a="scanstop">Detener</button>` : ''}
+		<div class="mbar" style="display:flex;flex-direction:column;gap:10px;align-items:stretch">
+			<div style="display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap">
+				<div class="s" style="flex:1 1 180px"><input type="search" data-a="q" value="${esc(S.q)}"
+					placeholder="${!totalModels && !isLoading ? 'Relay sin modelos en catálogo' : 'buscar: gpt, codex, claude...'}" aria-label="Buscar modelo" ${isLoading || (!totalModels && !isLoading) ? 'disabled' : ''} /></div>
+				<div class="row" style="margin-left:auto;gap:7px">
+					<button class="b xs" data-a="cat" data-p="${esc(p.id)}" ${isLoading ? 'disabled' : ''}>${isLoading ? '<span class="blink">●</span> Cargando modelos...' : 'Recargar modelos'}</button>
+					<button class="b xs go" data-a="scanall" data-p="${esc(p.id)}" ${S.scanning || isLoading || (!totalModels && !isLoading) ? 'disabled' : ''}>${
+						S.scanning ? '<span class="blink">●</span> Probando todos...' : 'Probar todos'
+					}</button>
+					${S.scanning ? `<button class="b xs ko" data-a="scanstop">Detener</button>` : ''}
+				</div>
 			</div>
+			${totalModels > 0 ? `
+				<div style="display:flex;align-items:center;gap:8px;width:100%">
+					<div class="chips" id="mchips">${chipsHtml(p)}</div>
+				</div>
+			` : ''}
 		</div>
 		<div class="prog" id="prog" ${S.scanning ? '' : 'hidden'}><div class="bar2"><i></i></div><div class="t"></div></div>
 		<div class="in flush" id="mt">
