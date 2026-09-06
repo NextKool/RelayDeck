@@ -1051,7 +1051,7 @@ function paneChat(p) {
 				${isSending ? `
 					<div style="align-self:flex-start;padding:8px 12px;border-radius:var(--r);background:var(--pane2);border:1px solid var(--line);display:inline-flex;align-items:center;gap:7px">
 						<span class="blink" style="color:var(--cyan);font-size:10px">●</span>
-						<span style="color:var(--cyan);font-size:11px">Esperando respuesta del servidor <span id="chat-timer" style="color:var(--dim);font-weight:700">(1s / 15s máx)</span>...</span>
+						<span style="color:var(--cyan);font-size:11px">Esperando respuesta del servidor <span id="chat-timer" style="color:var(--dim);font-weight:700">(1s / 30s máx)</span>...</span>
 					</div>
 				` : ''}
 			</div>
@@ -2312,7 +2312,7 @@ document.addEventListener('submit', async (e) => {
 		S.chatSending[key] = true
 		S.chatStarted = S.chatStarted || {}
 		S.chatStarted[key] = Date.now()
-		const CHAT_MAX_SEC = 15
+		const CHAT_MAX_SEC = 30
 		const ctrl = new AbortController()
 		S.chatControllers = S.chatControllers || {}
 		S.chatControllers[key] = ctrl
@@ -2362,7 +2362,7 @@ document.addEventListener('submit', async (e) => {
 			})
 		} catch (err) {
 			if (timedOut) {
-				S.chatMessages[key].push({ role: 'assistant', content: '⏱️ Tiempo de espera agotado (15s máx). El servidor tardó demasiado en responder.' })
+				S.chatMessages[key].push({ role: 'assistant', content: '⏱️ Tiempo de espera agotado (30s máx). El servidor tardó demasiado en responder.' })
 			} else if (err.name === 'AbortError' || err.message?.includes('aborted')) {
 				return
 			} else {

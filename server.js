@@ -578,10 +578,11 @@ function orderCandidates(models, discovery) {
 
 async function probe(url, options = {}) {
 	const started = Date.now()
+	const timeout = options.timeout || TIMEOUT_MS
 	try {
 		const res = await fetch(url, {
 			...options,
-			signal: AbortSignal.timeout(TIMEOUT_MS),
+			signal: AbortSignal.timeout(timeout),
 		})
 		const text = await res.text()
 		let json = null
@@ -745,7 +746,7 @@ async function probeSse(url, options = {}) {
  * `profile` (el que funciono) y `clientBlocked` (true si todos fueron
  * rechazados por huella).
  */
-async function probeSmart(url, { apiKey, method = 'GET', json, extraHeaders, sse = false } = {}) {
+async function probeSmart(url, { apiKey, method = 'GET', json, extraHeaders, sse = false, timeout } = {}) {
 	const body = json === undefined ? undefined : JSON.stringify(json)
 	const contentType = body ? { 'Content-Type': 'application/json' } : {}
 	const accept = sse ? 'text/event-stream' : 'application/json'
@@ -756,6 +757,7 @@ async function probeSmart(url, { apiKey, method = 'GET', json, extraHeaders, sse
 		const result = await withRetries(() =>
 			run(url, {
 				method,
+				timeout,
 				headers: buildHeaders(profile, apiKey, {
 					accept,
 					extra: { ...contentType, ...extraHeaders },
@@ -2464,6 +2466,7 @@ const routes = {
 			anthRes = await probeSmart(endpoint(baseUrl, '/messages'), {
 				apiKey,
 				method: 'POST',
+				timeout: 30000,
 				extraHeaders: {
 					'anthropic-version': '2023-06-01',
 					'x-api-key': apiKey,
@@ -2497,7 +2500,7 @@ const routes = {
 			}
 		}
 
-		const CHAT_MAX_MS = 14500
+		const CHAT_MAX_MS = 30000
 		const remaining = () => CHAT_MAX_MS - (Date.now() - started)
 
 		const effort = body.effort || stored?.effort || 'high'
@@ -2516,6 +2519,7 @@ const routes = {
 			chatRes = await probeSmart(endpoint(baseUrl, '/chat/completions'), {
 				apiKey,
 				method: 'POST',
+				timeout: Math.max(remaining(), 5000),
 				json: chatPayload,
 			})
 			if (chatRes.ok && !chatRes.json?.error) {
@@ -2551,6 +2555,7 @@ const routes = {
 			respRes = await probeSmart(endpoint(baseUrl, '/responses'), {
 				apiKey,
 				method: 'POST',
+				timeout: Math.max(remaining(), 5000),
 				json: respPayload,
 			})
 			if (respRes.ok && !respRes.json?.error) {
@@ -2569,8 +2574,8 @@ const routes = {
 			}
 		}
 
-		if (Date.now() - started >= 14000) {
-			throw new Error('Tiempo de espera agotado (15s máx). El relay tardó demasiado en responder.')
+		if (Date.now() - started >= 29000) {
+			throw new Error('Tiempo de espera agotado (30s máx). El relay tardó demasiado en responder.')
 		}
 
 		const failed = isClaude && anthRes ? anthRes : (chatRes?.httpStatus ? chatRes : (respRes || anthRes || chatRes))
