@@ -1110,21 +1110,10 @@ function tableHtml(p) {
 			<div style="font-size:11.5px;color:var(--dim);max-width:440px;line-height:1.55">
 				El endpoint <code>/v1/models</code> de <b>${esc(p.label)}</b> respondió con una lista vacía (0 modelos).
 			</div>
-			${p.model ? `
-				<div style="font-size:11.5px;color:var(--txt2);margin-top:2px">
-					Modelo configurado en el proveedor: <code>${esc(p.model)}</code>
-				</div>
-				<div class="row" style="margin-top:6px;gap:8px;justify-content:center">
-					<button class="b xs go" data-a="try" data-p="${esc(p.id)}" data-m="${esc(p.model)}">Probar ${esc(p.model)}</button>
-					<button class="b xs" data-a="cat" data-p="${esc(p.id)}">Recargar catálogo</button>
-					<button class="b xs" data-a="edit" data-p="${esc(p.id)}">Editar proveedor</button>
-				</div>
-			` : `
-				<div class="row" style="margin-top:6px;gap:8px;justify-content:center">
-					<button class="b xs go" data-a="cat" data-p="${esc(p.id)}">Recargar catálogo</button>
-					<button class="b xs" data-a="edit" data-p="${esc(p.id)}">Editar proveedor</button>
-				</div>
-			`}
+			<div class="row" style="margin-top:6px;gap:8px;justify-content:center">
+				<button class="b xs go" data-a="cat" data-p="${esc(p.id)}">Recargar catálogo</button>
+				<button class="b xs" data-a="edit" data-p="${esc(p.id)}">Editar proveedor</button>
+			</div>
 		</div>`
 	}
 
