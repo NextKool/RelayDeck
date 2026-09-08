@@ -38,6 +38,11 @@
 //                    retirado (410). El panel debe barrer y encontrarlo.
 // Modo nores       : 27 modelos y NINGUNO sirve /v1/responses (404 pelado),
 //                    pero Chat si funciona            -> no_responses + traductor
+// Modo relayconsistent: responde a nonces, expone uso/modelo y rechaza modelos
+//                    aleatorios. Permite probar un relay coherente.
+// Modo relaymismatch: igual, pero declara otro identificador para probar anomalías.
+// Modo relayalias   : devuelve un alias gateway-* y rechaza el control con 503.
+// Modo relaychat    : solo Chat, para validar ruta directa y puente local juntos.
 const http = require('http')
 
 const MANY_MODELS = [
@@ -46,9 +51,9 @@ const MANY_MODELS = [
 	...Array.from({ length: 25 }, (_, i) => `modelo-relleno-${String(i + 1).padStart(2, '0')}`),
 ]
 
-const json = (res, status, payload) => {
+const json = (res, status, payload, headers = {}) => {
 	const body = JSON.stringify(payload)
-	res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
+	res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), ...headers })
 	res.end(body)
 }
 
@@ -58,11 +63,12 @@ const CLIENT_BLOCK = {
 	},
 }
 
-const sse = (res, events) => {
+const sse = (res, events, headers = {}) => {
 	res.writeHead(200, {
 		'Content-Type': 'text/event-stream',
 		'Cache-Control': 'no-cache',
 		Connection: 'keep-alive',
+		...headers,
 	})
 	for (const e of events) res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`)
 	res.write('data: [DONE]\n\n')
@@ -89,6 +95,7 @@ const missingCodexHeaders = (req) => {
 
 function createFakeProvider(mode = 'full') {
 	let slowHits = 0
+	let diagnosticHits = 0
 	const MODE = mode
 
 	return http.createServer((req, res) => {
@@ -201,7 +208,57 @@ function createFakeProvider(mode = 'full') {
 			})
 		}
 
+		if (url.startsWith('/v1/models/') && ['relayconsistent', 'relaymismatch', 'relayalias', 'relaychat'].includes(MODE)) {
+			const asked = decodeURIComponent(url.slice('/v1/models/'.length))
+			const returned = MODE === 'relaymismatch'
+				? 'qwen-test-substitute'
+				: MODE === 'relayalias'
+					? 'gateway-fable-5'
+					: asked
+			return json(res, 200, { id: returned, object: 'model', owned_by: 'fake-reference' })
+		}
+
 		if (url === '/v1/responses') {
+			if (MODE === 'relaychat') {
+				return json(res, 404, { error: { message: 'Unknown request URL: /v1/responses' } })
+			}
+			if (MODE === 'relayconsistent' || MODE === 'relaymismatch' || MODE === 'relayalias') {
+				return req.on('end', () => {
+					let parsed = {}
+					try {
+						parsed = JSON.parse(body || '{}')
+					} catch {}
+					const asked = String(parsed.model || '')
+					const expected = MODE === 'relayalias' ? 'claude-fable-5' : 'gpt-5.5'
+					if (asked !== expected) {
+						if (MODE === 'relayalias') {
+							return json(res, 503, { error: { message: `No available channel for model ${asked} under group default` } })
+						}
+						return json(res, 404, { error: { type: 'not_found_error', message: 'model not found' } })
+					}
+					const prompt = typeof parsed.input === 'string' ? parsed.input : JSON.stringify(parsed.input || '')
+					const nonce = /RD-([a-f0-9]{24})/i.exec(prompt)?.[1] || 'missing'
+					const returned = MODE === 'relaymismatch' ? 'qwen-test-substitute' : MODE === 'relayalias' ? 'gateway-fable-5' : asked
+					diagnosticHits++
+					const usage = { input_tokens: Math.max(1, Math.ceil(prompt.length / 4)), output_tokens: 8 }
+					if (parsed.stream === true) {
+						return sse(res, [
+							{ type: 'response.created', response: { id: `resp_diagnostic_${diagnosticHits}`, status: 'in_progress', model: returned } },
+							{ type: 'response.output_text.delta', delta: `RD-${nonce}` },
+							{ type: 'response.completed', response: { id: `resp_diagnostic_${diagnosticHits}`, status: 'completed', model: returned, usage } },
+						], { 'x-request-id': `req_diagnostic_${diagnosticHits}`, 'openai-version': '2020-10-01' })
+					}
+					return json(res, 200, {
+						id: `resp_diagnostic_${diagnosticHits}`,
+						object: 'response',
+						status: 'completed',
+						model: returned,
+						system_fingerprint: 'fp_fake_reference',
+						usage,
+						output: [{ type: 'message', content: [{ type: 'output_text', text: `RD-${nonce}` }] }],
+					}, { 'x-request-id': `req_diagnostic_${diagnosticHits}`, 'openai-version': '2020-10-01' })
+				})
+			}
 			if (MODE === 'claudeonly') {
 				return json(res, 404, { error: { message: 'Unknown request URL: /v1/responses' } })
 			}
@@ -328,6 +385,27 @@ function createFakeProvider(mode = 'full') {
 				object: 'response',
 				status: 'completed',
 				output: [{ type: 'message', content: [{ type: 'output_text', text: 'pong' }] }],
+			})
+		}
+
+		if (url === '/v1/chat/completions' && MODE === 'relaychat') {
+			return req.on('end', () => {
+				let parsed = {}
+				try {
+					parsed = JSON.parse(body || '{}')
+				} catch {}
+				const asked = String(parsed.model || '')
+				if (!['gpt-5.5', 'gpt-5.6-terra'].includes(asked)) return json(res, 404, { error: { message: `model ${asked} not found` } })
+				const prompt = String(parsed.messages?.[parsed.messages.length - 1]?.content || '')
+				const nonce = /RD-([a-f0-9]{24})/i.exec(prompt)?.[1]
+				diagnosticHits++
+				return json(res, 200, {
+					id: `chatcmpl-diagnostic-${diagnosticHits}`,
+					object: 'chat.completion',
+					model: asked,
+					usage: { prompt_tokens: Math.max(1, Math.ceil(prompt.length / 4)), completion_tokens: 8 },
+					choices: [{ message: { role: 'assistant', content: nonce ? `RD-${nonce}` : 'pong' }, finish_reason: 'stop' }],
+				}, { 'x-request-id': `req_diagnostic_chat_${diagnosticHits}` })
 			})
 		}
 

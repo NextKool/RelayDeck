@@ -1,12 +1,13 @@
 {
   "name": "relaydeck",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "RelayDeck - Consola local para probar, diagnosticar y conmutar APIs de IA para Codex CLI y Claude Code",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node qa/run-tests.js"
+    "test": "node qa/run-tests.js",
+    "test:offline": "node qa/regressions-offline.js"
   },
   "engines": {
     "node": ">=20"

@@ -60,16 +60,25 @@ function ensureHome() {
 	} catch {}
 }
 
+const memoryModelResults = new Map()
+const memorySupports = new Map()
+
 function readStore() {
+	let list = []
 	try {
 		const raw = fs.readFileSync(STORE, 'utf8')
 		const parsed = JSON.parse(raw)
 		if (!parsed || !Array.isArray(parsed.providers)) throw new Error('formato de providers.json no reconocido')
-		return parsed.providers
+		list = parsed.providers
 	} catch (error) {
 		if (error?.code === 'ENOENT') return []
 		throw new Error(`No se pudo leer ${STORE}: ${error.message || error}`)
 	}
+	return list.map((p) => ({
+		...p,
+		modelResults: memoryModelResults.get(p.id) || p.modelResults || {},
+		supports: memorySupports.get(p.id) || p.supports || null,
+	}))
 }
 
 function atomicWrite(file, content, mode = 0o600) {
@@ -108,7 +117,23 @@ function writeStore(providers) {
 			throw new Error(`Fallo el respaldo de ${STORE}: ${err.message || err}`)
 		}
 	}
-	atomicWrite(STORE, JSON.stringify({ version: 1, providers }, null, 2) + '\n')
+	for (const p of providers) {
+		if (p.modelResults && Object.keys(p.modelResults).length) {
+			memoryModelResults.set(p.id, p.modelResults)
+		}
+		if (p.supports) {
+			memorySupports.set(p.id, p.supports)
+		}
+	}
+	const clean = providers.map((p) => {
+		const c = { ...p }
+		delete c.lastTest
+		delete c.modelResults
+		delete c.supports
+		delete c.slow
+		return c
+	})
+	atomicWrite(STORE, JSON.stringify({ version: 1, providers: clean }, null, 2) + '\n')
 }
 
 function slug(text) {
@@ -576,6 +601,29 @@ function orderCandidates(models, discovery) {
 
 // ------------------------------------------------------------------- testing
 
+const DIAGNOSTIC_RESPONSE_HEADERS = [
+	'x-request-id',
+	'request-id',
+	'openai-version',
+	'openai-processing-ms',
+	'openai-organization',
+	'anthropic-organization-id',
+	'anthropic-workspace-id',
+	'x-ratelimit-limit-requests',
+	'x-ratelimit-limit-tokens',
+	'cf-ray',
+	'via',
+]
+
+function observableResponseHeaders(headers) {
+	const picked = {}
+	for (const name of DIAGNOSTIC_RESPONSE_HEADERS) {
+		const value = headers?.get?.(name)
+		if (value) picked[name] = value.slice(0, 200)
+	}
+	return picked
+}
+
 async function probe(url, options = {}) {
 	const started = Date.now()
 	const timeout = options.timeout || TIMEOUT_MS
@@ -599,6 +647,9 @@ async function probe(url, options = {}) {
 			ms: Date.now() - started,
 			text,
 			json,
+			headers: observableResponseHeaders(res.headers),
+			finalUrl: res.url,
+			redirected: res.redirected,
 			retryAfter: res.headers.get('retry-after'),
 		}
 	} catch (error) {
@@ -664,9 +715,14 @@ async function withRetries(run) {
  */
 async function probeSse(url, options = {}) {
 	const started = Date.now()
+	const timeout = options.timeout || TIMEOUT_MS
+	const completeSse = options.completeSse === true
+	const fetchOptions = { ...options }
+	delete fetchOptions.timeout
+	delete fetchOptions.completeSse
 	let res
 	try {
-		res = await fetch(url, { ...options, signal: AbortSignal.timeout(TIMEOUT_MS) })
+		res = await fetch(url, { ...fetchOptions, signal: AbortSignal.timeout(timeout) })
 	} catch (error) {
 		return {
 			ok: false,
@@ -692,7 +748,9 @@ async function probeSse(url, options = {}) {
 			if (done) break
 			buffer += decoder.decode(value, { stream: true })
 			// Un evento SSE completo, o suficiente error como para diagnosticar.
-			if (/(^|\n)data:\s*\S/.test(buffer) || buffer.length > 16384) {
+			if (/(^|\n)data:\s*\S/.test(buffer)) sawEvent = true
+			const terminalEvent = /data:\s*\[DONE\]/.test(buffer) || /(?:^|\n)data:\s*\{[^\n]*"type"\s*:\s*"(?:response\.completed|message_stop)"[^\n]*\}\r?\n\r?\n/.test(buffer)
+			if ((!completeSse && sawEvent) || terminalEvent || buffer.length > (completeSse ? 1e6 : 16384)) {
 				sawEvent = /(^|\n)data:\s*\S/.test(buffer)
 				break
 			}
@@ -725,6 +783,33 @@ async function probeSse(url, options = {}) {
 			json = JSON.parse(first[2])
 		} catch {}
 	}
+	if (completeSse && sawEvent) {
+		const events = []
+		for (const match of buffer.matchAll(/(?:^|\n)data:\s*(.+)/g)) {
+			const data = match[1].trim()
+			if (!data || data === '[DONE]') continue
+			try {
+				events.push(JSON.parse(data))
+			} catch {}
+		}
+		let text = ''
+		let finalObject = null
+		for (const event of events) {
+			if (event?.type === 'message_start' && event.message) finalObject = event.message
+			if (event?.type === 'response.output_text.delta' && typeof event.delta === 'string') text += event.delta
+			if (event?.type === 'content_block_delta' && typeof event.delta?.text === 'string') text += event.delta.text
+			for (const choice of event?.choices || []) {
+				if (typeof choice?.delta?.content === 'string') text += choice.delta.content
+			}
+			if (event?.type === 'response.completed' && event.response) finalObject = event.response
+			if (event?.type === 'message_delta' && finalObject && event.usage) {
+				finalObject = { ...finalObject, usage: { ...(finalObject.usage || {}), ...event.usage } }
+			}
+		}
+		const last = events[events.length - 1] || json || {}
+		json = finalObject || last
+		if (text && !responseText(json)) json = { ...json, output_text: text }
+	}
 
 	const streamed = sawEvent || contentType.includes('text/event-stream')
 	const payload = /(^|\n)data:\s*(.+)/.exec(buffer)?.[2]?.trim()
@@ -735,6 +820,9 @@ async function probeSse(url, options = {}) {
 		ms: Date.now() - started,
 		text: buffer,
 		json,
+		headers: observableResponseHeaders(res.headers),
+		finalUrl: res.url,
+		redirected: res.redirected,
 		sse: streamed,
 		retryAfter,
 	}
@@ -746,7 +834,7 @@ async function probeSse(url, options = {}) {
  * `profile` (el que funciono) y `clientBlocked` (true si todos fueron
  * rechazados por huella).
  */
-async function probeSmart(url, { apiKey, method = 'GET', json, extraHeaders, sse = false, timeout } = {}) {
+async function probeSmart(url, { apiKey, method = 'GET', json, extraHeaders, sse = false, completeSse = false, timeout } = {}) {
 	const body = json === undefined ? undefined : JSON.stringify(json)
 	const contentType = body ? { 'Content-Type': 'application/json' } : {}
 	const accept = sse ? 'text/event-stream' : 'application/json'
@@ -755,9 +843,10 @@ async function probeSmart(url, { apiKey, method = 'GET', json, extraHeaders, sse
 
 	for (const profile of CLIENT_PROFILES) {
 		const result = await withRetries(() =>
-			run(url, {
-				method,
-				timeout,
+				run(url, {
+					method,
+					timeout,
+					...(sse ? { completeSse } : {}),
 				headers: buildHeaders(profile, apiKey, {
 					accept,
 					extra: { ...contentType, ...extraHeaders },
@@ -793,6 +882,10 @@ function responseText(json) {
 function apiError(result) {
 	if (result.networkError === 'timeout') return 'Tiempo de espera agotado (15s): el servidor no respondió.'
 	if (result.httpStatus === 0 && result.networkError) return `Error de red: ${result.networkError}`
+	const rawText = String(result.text || '').trim()
+	if (/^(?:<!doctype\s+html|<html\b)/i.test(rawText)) {
+		return `El endpoint devolvió una página HTML en vez de JSON (HTTP ${result.httpStatus || 0}). La ruta no es compatible o fue interceptada por el proxy/WAF del proveedor.`
+	}
 	const err = result.json?.error
 	// Algunos relays devuelven solo {error:{type:'openai_error'}} sin mensaje:
 	// mejor mostrar el codigo que un texto vacio e inutil.
@@ -1376,6 +1469,14 @@ async function runTest({ baseUrl, apiKey, model }) {
 		chat = chatResult
 		anthropic = anthropicRound.best
 		if (chat.ok) {
+			attempts.push({
+				model: alternateModel,
+				target: 'chat',
+				protocol: 'chat',
+				ok: true,
+				httpStatus: chat.httpStatus,
+				detail: 'OK (/v1/chat/completions)',
+			})
 			checks.chat = {
 				status: 'warn',
 				detail: 'Chat Completions funciona. Codex necesita el traductor local.',
@@ -1390,6 +1491,17 @@ async function runTest({ baseUrl, apiKey, model }) {
 					(sameProblem ? ` (problema del modelo "${alternateModel}", no del endpoint)` : ''),
 				ms: chat.ms,
 			}
+		}
+		if (anthropic.ok) {
+			attempts.push({
+				model: alternateModel,
+				target: 'claude',
+				protocol: 'anthropic',
+				ok: true,
+				httpStatus: anthropic.httpStatus,
+				ms: anthropic.ms,
+				detail: 'OK (/v1/messages)',
+			})
 		}
 		checks.anthropic = anthropic.ok
 			? { status: 'pass', detail: 'Anthropic Messages funciona; compatible con Claude Code.', ms: anthropic.ms }
@@ -1470,6 +1582,42 @@ async function runTest({ baseUrl, apiKey, model }) {
 
 const bridges = new Map() // providerId -> { server, port, url, signature }
 
+function detectedModelProtocol(provider, model = provider?.model) {
+	const result = provider?.modelResults?.[model]
+	if (!result?.ok) return null
+	const target = result.target || result.protocol
+	return target === 'claude' ? 'anthropic' : ['responses', 'chat', 'anthropic'].includes(target) ? target : null
+}
+
+function preferredModelProtocol(provider, model = provider?.model) {
+	const detected = detectedModelProtocol(provider, model)
+	if (detected) return detected
+	const supports = provider?.supports || provider?.lastTest?.supports || {}
+	if (supports.responses) return 'responses'
+	if (supports.chat) return 'chat'
+	if (supports.anthropic) return 'anthropic'
+	if (provider?.lastTest?.verdict === 'claude_only') return 'anthropic'
+	if (['chat_only', 'no_responses'].includes(provider?.lastTest?.verdict)) return 'chat'
+	return null
+}
+
+function providerNeedsBridge(provider, model = provider?.model, observedProtocol = null) {
+	const protocol = observedProtocol || preferredModelProtocol(provider, model)
+	return protocol ? protocol === 'chat' : provider?.useBridge === true
+}
+
+function rejectedUnknownModel(result) {
+	if (!result || result.httpStatus < 400 || result.httpStatus === 401 || result.httpStatus === 429) return false
+	const error = result.json?.error
+	if (!error || typeof error !== 'object') return false
+	if (/<(?:!doctype|html)\b/i.test(String(result.text || ''))) return false
+	const code = String(error.code || error.type || '')
+	const message = String(error.message || '')
+	return /^(model_not_found|unknown_model|invalid_model|unsupported_model|model_not_available)$/.test(code)
+		|| /\b(?:model|deployment)\b.{0,160}\b(?:not found|does not exist|not exist|unavailable|not available|unsupported|retired|end of life)\b/i.test(message)
+		|| /\b(?:unknown|unsupported|invalid|no such) model\b|no available channel for model|无此模型|不支持的模型|模型.{0,80}(?:不存在|不可用|已下线)/i.test(message)
+}
+
 function bridgeHeaders() {
 	// Mismas huellas de cliente que usa el panel: el relay ve un SDK conocido.
 	const profile = CLIENT_PROFILES[0]
@@ -1483,6 +1631,7 @@ function bridgeHeaders() {
 async function startBridge(provider) {
 	if (!provider.apiKey) throw new Error('Falta la API key')
 	if (!provider.model) throw new Error('Elige un modelo antes de iniciar el traductor')
+	if (!providerNeedsBridge(provider)) throw new Error('El puente Chat → Responses no corresponde al protocolo detectado para este modelo.')
 	const signature = JSON.stringify([provider.baseUrl, provider.apiKey, provider.model])
 	const existing = bridges.get(provider.id)
 	if (existing?.signature === signature) return { port: existing.port, url: existing.url, reused: true }
@@ -1532,7 +1681,7 @@ function stopBridge(id) {
 
 /** La URL que Codex debe usar: el puente si el relay solo tiene Chat, o directo si tiene Responses. */
 function effectiveBaseUrl(provider) {
-	if (!provider.useBridge) return provider.baseUrl
+	if (!provider.useBridge || !providerNeedsBridge(provider)) return provider.baseUrl
 	const live = bridges.get(provider.id)
 	return live?.url || `http://127.0.0.1:${provider.bridgePort || BRIDGE_BASE_PORT}/v1`
 }
@@ -2178,7 +2327,7 @@ function usageGuide(provider, target = 'codex') {
 		},
 	]
 
-	if (provider.useBridge) {
+	if (provider.useBridge && providerNeedsBridge(provider)) {
 		steps.push({
 			title: 'Mantén Node activo (Puente traductor local requerido)',
 			detail: `Gorouter solo ofrece Chat Completions y Codex CLI exige Responses. El panel traduce las peticiones en segundo plano en 127.0.0.1. Debes mantener "node server.js" encendido mientras uses Codex.`,
@@ -2389,6 +2538,502 @@ function cleanClaudeConfig(provider) {
 	} catch {}
 }
 
+async function runRelayDiagnostics(provider, model, onProgress = null) {
+	const baseUrl = provider.baseUrl
+	const apiKey = provider.apiKey
+	if (!baseUrl || !apiKey) throw new Error('Faltan baseUrl o apiKey')
+	if (!model) throw new Error('Falta el modelo')
+	const progress = (stage, state, detail, extra = {}) => {
+		if (typeof onProgress !== 'function') return
+		try { onProgress({ stage, state, detail, updatedAt: Date.now(), ...extra }) } catch {}
+	}
+
+	const requestedModel = String(model).trim()
+	progress('preparing', 'running', 'Preparando nonces, rutas y protocolo preferido del modelo.')
+	const expectedVendor = /claude/i.test(requestedModel)
+		? 'anthropic'
+		: /^(gpt|chatgpt|o\d|codex)/i.test(requestedModel)
+			? 'openai'
+			: null
+	const started = Date.now()
+	const discoveredProtocol = preferredModelProtocol(provider, requestedModel)
+
+	function responseUsage(json) {
+		const usage = json?.usage || {}
+		const input = usage.input_tokens ?? usage.prompt_tokens ?? usage.inputTokens ?? null
+		const output = usage.output_tokens ?? usage.completion_tokens ?? usage.outputTokens ?? null
+		const tokenNumber = (value) => {
+			if (value === null || value === undefined || value === '') return null
+			const parsed = Number(value)
+			return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+		}
+		return {
+			input: tokenNumber(input),
+			output: tokenNumber(output),
+		}
+	}
+
+	function modelFamily(value) {
+		const text = String(value || '').toLowerCase()
+		if (/claude|fable|opus|sonnet|haiku/.test(text)) return 'anthropic'
+		if (/(^|[-_.\/])(gpt|chatgpt|codex|o\d)([-_.\/]|$)/.test(text)) return 'openai'
+		if (/deepseek/.test(text)) return 'deepseek'
+		if (/qwen/.test(text)) return 'qwen'
+		if (/(^|[-_.\/])glm([-_.\/]|$)/.test(text)) return 'glm'
+		if (/gemini/.test(text)) return 'gemini'
+		if (/llama/.test(text)) return 'llama'
+		return null
+	}
+
+	function modelCore(value) {
+		return String(value || '')
+			.toLowerCase()
+			.split(/[^a-z0-9.]+/)
+			.filter(Boolean)
+			.filter((part) => !['gateway', 'proxy', 'relay', 'model', 'anthropic', 'openai', 'claude'].includes(part))
+			.join('-')
+	}
+
+	function declaredModelRelation(returned) {
+		const asked = requestedModel.toLowerCase()
+		const got = String(returned || '').toLowerCase()
+		if (!got) return 'missing'
+		if (got === asked) return 'exact'
+		if (got.startsWith(asked + '-')) {
+			const suffix = got.slice(asked.length + 1)
+			if (/^\d{8}$/.test(suffix) || /^\d{4}-\d{2}-\d{2}$/.test(suffix)) return 'snapshot'
+		}
+		if (modelCore(got) === modelCore(asked)) return 'gateway_alias'
+		const askedFamily = modelFamily(asked)
+		const returnedFamily = modelFamily(got)
+		if (askedFamily && returnedFamily && askedFamily !== returnedFamily) return 'family_mismatch'
+		if (askedFamily && returnedFamily === askedFamily) return 'family_alias'
+		return 'unverified_alias'
+	}
+
+	async function queryProtocol(queryBaseUrl, protocol, prompt, queryModel, maxTokens, timeout) {
+		let res
+		let reply = ''
+		if (protocol === 'anthropic') {
+			const anthropicRequest = (stream) => probeSmart(endpoint(queryBaseUrl, '/messages'), {
+				apiKey,
+				method: 'POST',
+				timeout,
+				sse: stream,
+				completeSse: stream,
+				extraHeaders: { 'anthropic-version': '2023-06-01', 'x-api-key': apiKey },
+				json: { model: queryModel, max_tokens: maxTokens, stream, messages: [{ role: 'user', content: prompt }] },
+			})
+			res = await anthropicRequest(true)
+			if (!res.ok && !isAuthStatus(res.httpStatus) && res.httpStatus !== 0) res = await anthropicRequest(false)
+			if (res.ok && !res.json?.error) {
+				const content = Array.isArray(res.json?.content) ? res.json.content : []
+				reply = (responseText(res.json) || content
+					.map((part) => (typeof part === 'string' ? part : part?.text || ''))
+					.join(''))
+					.trim()
+			}
+		} else if (protocol === 'responses') {
+			const responsesRequest = (stream) => probeSmart(endpoint(queryBaseUrl, '/responses'), {
+				apiKey,
+				method: 'POST',
+				timeout,
+				sse: stream,
+				completeSse: stream,
+				json: { model: queryModel, input: prompt, max_output_tokens: maxTokens, stream },
+			})
+			res = await responsesRequest(true)
+			if (!res.ok && !isAuthStatus(res.httpStatus) && res.httpStatus !== 0) res = await responsesRequest(false)
+			if (res.ok && !res.json?.error) reply = (responseText(res.json) || '').trim()
+		} else {
+			res = await probeSmart(endpoint(queryBaseUrl, '/chat/completions'), {
+				apiKey,
+				method: 'POST',
+				timeout,
+				json: { model: queryModel, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens },
+			})
+			if (res.ok && !res.json?.error) reply = String(res.json?.choices?.[0]?.message?.content || '').trim()
+		}
+		return {
+			ok: Boolean(res?.ok && reply),
+			reply,
+			protocol,
+			httpStatus: res?.httpStatus || 0,
+			ms: res?.ms || 0,
+			rawId: String(res?.json?.id || ''),
+			returnedModel: String(res?.json?.model || ''),
+			systemFingerprint: String(res?.json?.system_fingerprint || ''),
+			usage: responseUsage(res?.json),
+			headers: res?.headers || {},
+			finalUrl: res?.finalUrl || '',
+			redirected: Boolean(res?.redirected),
+			error: res?.ok ? '' : apiError(res || {}),
+			result: res || null,
+		}
+	}
+
+	async function sendQuery(queryBaseUrl, prompt, { queryModel = requestedModel, maxTokens = 80, timeout = 12000, onlyProtocol = null, protocolOrder = null } = {}) {
+		const fallback = expectedVendor === 'anthropic'
+			? ['anthropic', 'chat', 'responses']
+			: ['responses', 'chat', 'anthropic']
+		const preferred = [...new Set([discoveredProtocol, ...fallback].filter(Boolean))]
+		const protocols = onlyProtocol ? [onlyProtocol] : protocolOrder || preferred
+		let last = null
+		for (const protocol of protocols) {
+			last = await queryProtocol(queryBaseUrl, protocol, prompt, queryModel, maxTokens, timeout)
+			if (last.ok) return last
+			if (isAuthStatus(last.httpStatus)) return last
+		}
+		return last || { ok: false, reply: '', protocol: '', httpStatus: 0, headers: {}, usage: {} }
+	}
+
+	let endpointUrl
+	try {
+		endpointUrl = new URL(baseUrl)
+	} catch {
+		throw new Error('baseUrl inválida')
+	}
+	const host = endpointUrl.hostname.toLowerCase()
+	const configuredOfficialHost = expectedVendor === 'openai'
+		? host === 'api.openai.com'
+		: expectedVendor === 'anthropic'
+			? host === 'api.anthropic.com'
+			: false
+	const secureTransport = endpointUrl.protocol === 'https:'
+	const loopbackTransport = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host)
+	const safeTransport = secureTransport || loopbackTransport
+
+	const nonceA = crypto.randomBytes(12).toString('hex')
+	const nonceB = crypto.randomBytes(12).toString('hex')
+	const shortPrompt = `Freshness control. Reply with exactly RD-${nonceA} and nothing else.`
+	const longPrompt = `Freshness and accounting control. Ignore this inert padding: ${'relaydeck-calibration '.repeat(48)} Reply with exactly RD-${nonceB} and nothing else.`
+	const skippedResult = (reason) => ({
+		ok: false,
+		skipped: true,
+		reply: '',
+		protocol: '',
+		httpStatus: 0,
+		ms: 0,
+		rawId: '',
+		returnedModel: '',
+		systemFingerprint: '',
+		usage: { input: null, output: null },
+		headers: {},
+		finalUrl: '',
+		redirected: false,
+		error: reason,
+	})
+	progress('preparing', 'done', 'Rutas, nonces y protocolo preferido preparados.')
+	progress('direct_first', 'running', 'Enviando el primer desafío de frescura por la ruta directa.')
+	const first = await sendQuery(baseUrl, shortPrompt)
+	progress('direct_first', first.ok ? 'done' : 'failed', first.ok
+		? `Primer desafío directo completado por ${first.protocol} en ${first.ms} ms.`
+		: `Primer desafío directo completado sin respuesta utilizable (${first.error || `HTTP ${first.httpStatus || 0}`}).`)
+	progress('direct_second', 'running', first.ok
+		? `Enviando el segundo desafío por ${first.protocol} con una entrada más larga.`
+		: 'El primer desafío falló; ejecutando el segundo de forma independiente por los protocolos disponibles.')
+	const second = await sendQuery(baseUrl, longPrompt, first.ok ? { onlyProtocol: first.protocol } : {})
+	const observedProtocol = first.ok ? first.protocol : second.ok ? second.protocol : null
+	const useDiagnosticBridge = providerNeedsBridge(provider, requestedModel, observedProtocol)
+	progress('direct_second', second.ok ? 'done' : 'failed', second.ok
+		? `Segundo desafío directo completado por ${second.protocol} en ${second.ms} ms.`
+		: `Segundo desafío directo completado sin respuesta utilizable (${second.error || `HTTP ${second.httpStatus || 0}`}).`, { useBridge: useDiagnosticBridge })
+	const invalidModel = crypto.randomBytes(18).toString('base64url').toLowerCase()
+	progress('routing_negative', 'running', 'Enviando un identificador de modelo aleatorio para detectar remapeo o selección ignorada.')
+	const negativePromise = sendQuery(baseUrl, `Reply with exactly RD-${nonceA}.`, {
+		queryModel: invalidModel,
+		maxTokens: 40,
+		...(first.ok ? { onlyProtocol: first.protocol } : {}),
+	}).then((result) => {
+		progress('routing_negative', 'done', `Control de modelo inexistente ejecutado: HTTP ${result.httpStatus || 0}.`)
+		return result
+	})
+	progress('model_metadata', 'running', 'Consultando el registro de metadatos del modelo ofrecido.')
+	const modelRecordPromise = probeSmart(endpoint(baseUrl, `/models/${encodeURIComponent(requestedModel)}`), { apiKey, timeout: 12000 })
+		.then((result) => {
+			progress('model_metadata', 'done', `Consulta de metadatos ejecutada: HTTP ${result.httpStatus || 0}.`)
+			return result
+		})
+	const [negative, modelRecord] = await Promise.all([negativePromise, modelRecordPromise])
+
+	let bridgeRun = null
+	if (useDiagnosticBridge) {
+		let activeBridgeStage = 'bridge_first'
+		const diagnosticBridgeProvider = {
+			...provider,
+			id: `${provider.id}-diagnostic-${nonceA.slice(0, 8)}`,
+			model: requestedModel,
+			bridgePort: null,
+			useBridge: true,
+			modelResults: { ...provider.modelResults, [requestedModel]: { ok: true, target: observedProtocol || 'chat' } },
+		}
+		let diagnosticBridgeStarted = false
+		try {
+			progress('bridge_first', 'running', `Iniciando un puente temporal para "${requestedModel}" y enviando el primer desafío.`)
+			const bridge = await startBridge(diagnosticBridgeProvider)
+			diagnosticBridgeStarted = true
+			const bridgeUrl = bridge.url
+			const bridgeFirst = await sendQuery(bridgeUrl, shortPrompt, { protocolOrder: ['responses'] })
+			progress('bridge_first', bridgeFirst.ok ? 'done' : 'failed', bridgeFirst.ok
+				? `Primer desafío del puente completado en ${bridgeFirst.ms} ms.`
+				: `Primer desafío del puente completado sin respuesta utilizable (${bridgeFirst.error || `HTTP ${bridgeFirst.httpStatus || 0}`}).`)
+			activeBridgeStage = 'bridge_second'
+			progress('bridge_second', 'running', bridgeFirst.ok
+				? 'Enviando el segundo desafío para contrastar frescura y contadores del puente.'
+				: 'El desafío A falló; ejecutando el desafío B de forma independiente por el mismo puente.')
+			const bridgeSecond = await sendQuery(bridgeUrl, longPrompt, { onlyProtocol: 'responses' })
+			progress('bridge_second', bridgeSecond.ok ? 'done' : 'failed', bridgeSecond.ok
+				? `Segundo desafío del puente completado en ${bridgeSecond.ms} ms.`
+				: `Segundo desafío del puente completado sin respuesta utilizable (${bridgeSecond.error || `HTTP ${bridgeSecond.httpStatus || 0}`}).`)
+			bridgeRun = { baseUrl: bridgeUrl, first: bridgeFirst, second: bridgeSecond }
+		} catch (error) {
+			bridgeRun = { skipped: true, error: String(error?.message || error) }
+			progress(activeBridgeStage, 'failed', `El control del puente terminó con error: ${bridgeRun.error}`)
+			if (activeBridgeStage === 'bridge_first') {
+				progress('bridge_second', 'skipped', `No pudo ejecutarse porque el puente temporal no inició: ${bridgeRun.error}`)
+			}
+		} finally {
+			if (diagnosticBridgeStarted) stopBridge(diagnosticBridgeProvider.id)
+		}
+	}
+	progress('analysis', 'running', 'Cruzando rutas, nonces, selección solicitada, tokens, protocolo e identificadores para cerrar el diagnóstico.')
+	const observedUrls = [first.finalUrl, second.finalUrl].filter(Boolean)
+	const observedHostsAreOfficial = observedUrls.length > 0 && observedUrls.every((value) => {
+		try {
+			const seen = new URL(value)
+			return seen.protocol === 'https:' && seen.hostname.toLowerCase() === host
+		} catch {
+			return false
+		}
+	})
+	const officialHost = configuredOfficialHost && observedHostsAreOfficial
+
+	function freshnessAssessment(runFirst, runSecond) {
+		const aMatches = Boolean(runFirst?.ok && runFirst.reply.includes(nonceA))
+		const bMatches = Boolean(runSecond?.ok && runSecond.reply.includes(nonceB))
+		if (runFirst?.ok && runSecond?.ok) {
+			return { status: aMatches && bMatches ? 'pass' : 'bad', aMatches, bMatches }
+		}
+		return { status: 'warn', aMatches, bMatches }
+	}
+
+	function usageAssessment(runFirst, runSecond, viaBridge = false) {
+		const a = runFirst?.usage?.input
+		const b = runSecond?.usage?.input
+		if (a == null || b == null) {
+			return { status: 'warn', comparable: false, detail: 'No se recibieron dos contadores de entrada comparables.', evidence: null }
+		}
+		if (viaBridge && a === 0 && b === 0) {
+			return { status: 'warn', comparable: false, detail: 'El puente recibió 0 → 0 porque el upstream no entregó usage; el adaptador completa esos campos con cero. No es una anomalía del modelo.', evidence: '0 → 0 (sintetizado por el puente)' }
+		}
+		if (a <= 0 || b <= 0) {
+			return { status: 'warn', comparable: false, detail: `La API declaró ${a} → ${b} tokens para entradas no vacías. El contador no es utilizable como evidencia.`, evidence: `${a} → ${b} tokens de entrada` }
+		}
+		return b > a
+			? { status: 'pass', comparable: true, detail: `El contador aumentó con el prompt largo (${a} → ${b}).`, evidence: `${a} → ${b} tokens de entrada` }
+			: { status: 'bad', comparable: true, detail: `El contador no reaccionó al cambio de longitud (${a} → ${b}); puede ser sintético o defectuoso.`, evidence: `${a} → ${b} tokens de entrada` }
+	}
+
+	const directFreshness = freshnessAssessment(first, second)
+	const bridgeFreshness = bridgeRun && !bridgeRun.skipped
+		? freshnessAssessment(bridgeRun.first, bridgeRun.second)
+		: null
+	const directAvailable = Boolean(first.ok || second.ok)
+	const bridgeAvailable = Boolean(bridgeRun && !bridgeRun.skipped && (bridgeRun.first.ok || bridgeRun.second.ok))
+	const targetAvailable = directAvailable || bridgeAvailable
+	const invalidRejected = rejectedUnknownModel(negative.result)
+	const invalidAccepted = negative.ok
+	const returnedModels = [...new Set([first.returnedModel, second.returnedModel].filter(Boolean))]
+	const modelRecordId = String(modelRecord.json?.id || '')
+	const modelOwner = String(modelRecord.json?.owned_by || '')
+	const modelValues = [...new Set([...returnedModels, modelRecordId].filter(Boolean))]
+	const modelRelations = modelValues.map((value) => ({ value, relation: declaredModelRelation(value) }))
+	const modelMismatch = modelRelations.some((item) => item.relation === 'family_mismatch')
+	const modelAlias = modelRelations.some((item) => ['gateway_alias', 'family_alias', 'unverified_alias'].includes(item.relation))
+	const hasModelMetadata = modelValues.length > 0
+	const directUsage = usageAssessment(first, second)
+	const bridgeUsage = bridgeRun && !bridgeRun.skipped ? usageAssessment(bridgeRun.first, bridgeRun.second, true) : null
+	const requestHeader = first.protocol === 'anthropic' ? 'request-id' : 'x-request-id'
+	const requestIds = [first.headers?.[requestHeader], second.headers?.[requestHeader]].filter(Boolean)
+	const repeatedRequestId = requestIds.length > 1 && new Set(requestIds).size !== requestIds.length
+	const fingerprintValues = [...new Set([first.systemFingerprint, second.systemFingerprint].filter(Boolean))]
+	const headerFacts = Object.entries(first.headers || {})
+		.filter(([name]) => name !== requestHeader)
+		.map(([name, value]) => `${name}=${value}`)
+
+	const criticalAnomaly = !safeTransport || invalidAccepted || modelMismatch || repeatedRequestId || directFreshness.status === 'bad' || bridgeFreshness?.status === 'bad' || directUsage.status === 'bad' || bridgeUsage?.status === 'bad'
+	const incompleteControls = [
+		directFreshness.status !== 'pass' && 'frescura directa',
+		!invalidRejected && 'rechazo del modelo inexistente',
+		(!hasModelMetadata || modelAlias) && 'identificadores declarados',
+		directUsage.status !== 'pass' && 'contadores de tokens directos',
+		useDiagnosticBridge && bridgeFreshness?.status !== 'pass' && 'respuesta del puente',
+		useDiagnosticBridge && bridgeUsage?.status !== 'pass' && 'contadores de tokens del puente',
+		(!first.ok || (discoveredProtocol && first.protocol !== discoveredProtocol)) && 'protocolo previamente detectado',
+		!requestIds.length && 'IDs de solicitud',
+	].filter(Boolean)
+	const controlsConsistent = !criticalAnomaly && incompleteControls.length === 0
+	let verdict
+	let verdictTitle
+	let verdictCls
+	let verdictDesc
+	if (!targetAvailable) {
+		verdict = 'diagnostic_inconclusive'
+		verdictTitle = 'DIAGNÓSTICO INCONCLUSO'
+		verdictCls = 'warn'
+		verdictDesc = 'Las solicitudes no produjeron respuestas utilizables. No se pudo comprobar si el relay respeta el modelo solicitado ni si sus respuestas son frescas.'
+	} else if (criticalAnomaly) {
+		verdict = 'routing_anomaly'
+		verdictTitle = 'ANOMALÍAS DEL RELAY DETECTADAS'
+		verdictCls = 'bad'
+		verdictDesc = 'Una o más observaciones contradicen el contrato solicitado: selección de modelo, frescura, contadores de tokens, transporte o trazabilidad. El diagnóstico detecta el incumplimiento, no identifica el modelo upstream.'
+	} else if (officialHost) {
+		verdict = 'official_endpoint_consistent'
+		verdictTitle = controlsConsistent ? 'ENDPOINT OFICIAL SIN ANOMALÍAS OBSERVABLES' : 'ENDPOINT OFICIAL; DIAGNÓSTICO PARCIAL'
+		verdictCls = controlsConsistent ? 'ok' : 'warn'
+		verdictDesc = controlsConsistent
+			? 'La URL apunta al dominio oficial esperado y los controles del contrato no mostraron contradicciones.'
+			: `La conexión permanece en el dominio oficial esperado. Controles incompletos: ${incompleteControls.join(', ')}.`
+	} else {
+		verdict = controlsConsistent ? 'relay_consistent' : 'relay_partial'
+		verdictTitle = controlsConsistent ? 'RELAY SIN ANOMALÍAS OBSERVABLES' : 'RELAY; DIAGNÓSTICO PARCIAL'
+		verdictCls = 'warn'
+		verdictDesc = controlsConsistent
+			? 'El relay respetó los controles observables de frescura, selección y metadatos. Esto indica cumplimiento del contrato durante la prueba; no describe el servicio upstream.'
+			: `El relay respondió, pero el diagnóstico es parcial. Controles incompletos o fallidos: ${incompleteControls.join(', ')}.`
+	}
+
+	const transportStatus = !safeTransport ? 'bad' : officialHost ? 'pass' : 'warn'
+	const transportDetail = !safeTransport
+		? `La API remota usa HTTP sin TLS (${host}); el tráfico y las respuestas pueden ser alterados.`
+		: loopbackTransport
+			? `El endpoint directo es local (${host}). El tráfico de loopback no sale a la red, pero cualquier upstream usado por ese proceso queda fuera de esta observación.`
+		: officialHost
+			? `Conexión HTTPS directa al dominio oficial esperado (${host}).`
+			: configuredOfficialHost
+				? `La URL configurada es oficial, pero no se pudo confirmar que las respuestas permanecieran en ese origen${first.redirected || second.redirected ? ' debido a redirecciones' : ''}.`
+				: `Conexión HTTPS a un intermediario (${host}); el upstream no es observable desde el cliente.`
+	const directFreshnessDetail = directFreshness.status === 'pass'
+		? `La ruta directa devolvió ambos nonces usando ${first.protocol}.`
+		: directFreshness.status === 'bad'
+			? `La ruta directa respondió dos veces, pero al menos un nonce fue incorrecto. Posible respuesta estática, caché o mutación del relay.`
+			: directAvailable
+				? `La ruta directa solo produjo una respuesta utilizable; el control quedó incompleto.`
+				: `Ningún protocolo directo respondió. Orden probado: ${[...new Set([discoveredProtocol, ...(expectedVendor === 'anthropic' ? ['anthropic', 'chat', 'responses'] : ['responses', 'chat', 'anthropic'])].filter(Boolean))].join(' → ')}.`
+	const routeStatus = invalidAccepted ? 'bad' : invalidRejected ? 'pass' : 'warn'
+	const routeDetail = invalidAccepted
+		? 'La pasarela aceptó un identificador de modelo aleatorio inexistente. Puede estar ignorando o remapeando el campo model.'
+		: invalidRejected
+			? `El servidor rechazó el identificador aleatorio con un error explícito de modelo (HTTP ${negative.httpStatus}). Esto es coherente con aplicar el selector model.`
+			: `El control negativo no fue concluyente (${negative.error || `HTTP ${negative.httpStatus || 0}`}).`
+	const metadataStatus = modelMismatch ? 'bad' : modelAlias || !hasModelMetadata ? 'warn' : 'pass'
+	const metadataDetail = modelMismatch
+		? `La API declaró una familia distinta a la solicitada: ${modelValues.join(', ')}.`
+		: modelAlias
+			? `La API reescribió el alias como ${modelValues.join(', ')}. Esto demuestra mapeo del identificador por el gateway, pero no constituye por sí solo un incumplimiento.`
+			: hasModelMetadata
+				? `Los metadatos declarados coinciden con "${requestedModel}". Siguen siendo afirmaciones del servidor, no una atestación.`
+				: 'La API omitió metadatos de modelo contrastables.'
+	const protocolStatus = first.ok ? (!discoveredProtocol || first.protocol === discoveredProtocol ? 'pass' : 'warn') : 'warn'
+	const protocolDetail = first.ok
+		? `Canal directo usado: ${first.protocol}${discoveredProtocol ? `; canal previamente detectado: ${discoveredProtocol}` : ''}. ID: ${first.rawId || 'no informado'}.`
+		: `No se obtuvo una respuesta directa válida. Último canal probado: ${first.protocol || 'ninguno'}.`
+	const bridgeStatus = !useDiagnosticBridge
+		? 'info'
+		: bridgeRun?.skipped
+			? 'warn'
+			: bridgeFreshness?.status || 'warn'
+	const bridgeDetail = !useDiagnosticBridge
+		? observedProtocol === 'anthropic'
+			? 'No aplica: este modelo usa el protocolo Anthropic directamente y el puente local solo traduce Chat Completions hacia Responses.'
+			: observedProtocol === 'responses'
+				? 'No aplica: este modelo respondió por Responses directamente y no necesita el puente traductor.'
+				: 'No se confirmó una ruta Chat utilizable ni un puente aplicable; la compatibilidad sigue sin determinarse.'
+		: bridgeRun?.skipped
+			? `No se pudo validar el puente local: ${bridgeRun.error}`
+			: bridgeFreshness?.status === 'pass'
+				? `El puente ${bridgeRun.baseUrl} tradujo ambos controles Responses hacia el upstream y conservó los nonces.`
+				: bridgeAvailable
+					? `El puente produjo evidencia parcial o alteró un nonce. Su campo model y sus IDs son generados por el adaptador local, no por el upstream.`
+					: `El puente ${bridgeRun?.baseUrl || 'local'} no produjo respuestas utilizables.`
+	const pathStatus = directFreshness.status === 'bad' || bridgeFreshness?.status === 'bad'
+		? 'bad'
+		: directFreshness.status === 'pass' && (!useDiagnosticBridge || bridgeFreshness?.status === 'pass')
+			? 'pass'
+			: 'warn'
+	const pathDetail = !useDiagnosticBridge
+		? observedProtocol === 'anthropic'
+			? 'Ruta directa Anthropic. El puente Chat→Responses no es compatible con este protocolo y no forma parte del diagnóstico.'
+			: observedProtocol === 'responses'
+				? 'Ruta Responses directa; el puente traductor no es necesario.'
+				: 'No se obtuvo una ruta directa operativa para comparar con el puente.'
+		: directFreshness.status === 'pass' && bridgeFreshness?.status === 'pass'
+			? 'La ruta directa y el puente local respondieron coherentemente a desafíos equivalentes.'
+			: 'No fue posible obtener resultados completos y concordantes de ambas rutas.'
+	const diagnosticSummary = {
+		conclusion: verdictTitle,
+		availability: targetAvailable
+			? `El modelo solicitado produjo una respuesta utilizable${directAvailable && bridgeAvailable ? ' por ambas rutas' : directAvailable ? ' por la ruta directa' : ' mediante el puente local'}.`
+			: 'Ninguna ruta produjo una respuesta utilizable.',
+		modelSelection: modelMismatch
+			? `CONTRADICCIÓN: el relay devolvió identificadores incompatibles con el modelo solicitado (${modelValues.join(', ')}).`
+			: modelAlias
+				? `ALIAS REESCRITO: el relay devolvió ${modelValues.join(', ')}; se detectó mapeo del identificador.`
+				: hasModelMetadata
+					? `CONSISTENTE: los identificadores devueltos coinciden con "${requestedModel}".`
+					: 'NO COMPROBABLE: el relay no expuso identificadores de modelo contrastables.',
+		freshness: directFreshnessDetail,
+		invalidModel: routeDetail,
+		routeComparison: pathDetail,
+		meaning: verdictDesc,
+	}
+	const traceDetail = requestIds.length
+		? `${requestHeader}: ${requestIds.join(', ')}${repeatedRequestId ? ' (repetido entre solicitudes)' : ''}${fingerprintValues.length ? `; system_fingerprint: ${fingerprintValues.join(', ')}` : ''}${headerFacts.length ? `; ${headerFacts.join('; ')}` : ''}. Estos valores pueden contrastarse con soporte, pero un relay también puede reescribirlos.`
+		: `No se recibieron identificadores ${requestHeader} del proveedor${fingerprintValues.length ? `; system_fingerprint declarado: ${fingerprintValues.join(', ')}` : ''}${headerFacts.length ? `; otros metadatos: ${headerFacts.join('; ')}` : ''}.`
+	const controlsRun = 2 + Number(!second.skipped) + Number(!negative.skipped) + (bridgeRun && !bridgeRun.skipped ? 1 + Number(!bridgeRun.second.skipped) : 0)
+
+	progress('analysis', 'done', 'Controles cruzados y diagnóstico generado.')
+	return {
+		ok: true,
+		model: requestedModel,
+		provider: provider.label,
+		verdict,
+		verdictTitle,
+		verdictCls,
+		verdictDesc,
+		diagnosticSummary,
+		provenance: officialHost ? 'official_endpoint' : 'intermediary',
+		diagnosticScope: !targetAvailable ? 'insufficient' : officialHost && !criticalAnomaly ? 'official_endpoint' : criticalAnomaly ? 'anomalous' : 'relay_limited',
+		controlsRun,
+		paths: {
+			direct: { available: directAvailable, protocol: observedProtocol || first.protocol || discoveredProtocol || null },
+			bridge: useDiagnosticBridge ? { available: bridgeAvailable, protocol: 'responses', skipped: Boolean(bridgeRun?.skipped) } : null,
+		},
+		limitations: 'Este diagnóstico no determina qué modelo real genera las respuestas. Solo evalúa el comportamiento observable del endpoint, el relay y sus rutas.',
+		ms: Date.now() - started,
+		probes: [
+			{ id: 'transport', name: 'Destino HTTP y protección TLS', status: transportStatus, scope: 'conexión visible', detail: transportDetail, evidence: [...new Set([endpointUrl.origin, ...observedUrls.map((value) => { try { return new URL(value).origin } catch { return '' } }).filter(Boolean)])].join(' → ') },
+			{ id: 'freshness', name: 'Respuesta a nonces nuevos', status: directFreshness.status, scope: 'frescura de respuesta', detail: directFreshnessDetail, evidence: `A=${first.httpStatus || 0}/${first.ms || 0}ms · B=${second.skipped ? 'omitido' : `${second.httpStatus || 0}/${second.ms || 0}ms`}` },
+			{ id: 'bridge', name: 'Adaptación mediante puente local', status: bridgeStatus, scope: 'ruta local', detail: bridgeDetail, evidence: bridgeRun && !bridgeRun.skipped ? `A=${bridgeRun.first.httpStatus || 0}/${bridgeRun.first.ms || 0}ms · B=${bridgeRun.second.skipped ? 'omitido' : `${bridgeRun.second.httpStatus || 0}/${bridgeRun.second.ms || 0}ms`}` : null },
+			{ id: 'path_consistency', name: 'Comparación de ruta directa y puente', status: pathStatus, scope: 'concordancia de rutas', detail: pathDetail, evidence: useDiagnosticBridge ? `directo=${directFreshness.status} · puente=${bridgeFreshness?.status || 'no disponible'}` : null },
+			{ id: 'routing', name: 'Rechazo de identificador inexistente', status: routeStatus, scope: 'aplicación del selector model', detail: routeDetail, evidence: `modelo aleatorio → HTTP ${negative.httpStatus || 0}` },
+			{ id: 'model_metadata', name: 'Identificador de modelo devuelto', status: metadataStatus, scope: 'metadatos declarados', detail: metadataDetail, evidence: modelValues.join(', ') + (modelOwner ? ` · owned_by=${modelOwner}` : '') || null },
+			{ id: 'usage', name: 'Contadores de tokens reportados', status: directUsage.status === 'bad' || bridgeUsage?.status === 'bad' ? 'bad' : directUsage.status === 'pass' || bridgeUsage?.status === 'pass' ? 'pass' : 'warn', scope: 'telemetría declarada', detail: `Directo: ${directUsage.detail}${bridgeUsage ? ` Puente: ${bridgeUsage.detail}` : ''}`, evidence: [directUsage.evidence, bridgeUsage?.evidence].filter(Boolean).join(' · ') || null },
+			{ id: 'protocol', name: 'Compatibilidad del protocolo API', status: protocolStatus, scope: 'contrato HTTP', detail: protocolDetail, evidence: first.rawId || null },
+			{ id: 'trace', name: 'IDs y cabeceras de solicitud', status: repeatedRequestId ? 'bad' : requestIds.length ? 'pass' : 'warn', scope: 'trazabilidad declarada', detail: traceDetail, evidence: requestIds.join(', ') || fingerprintValues.join(', ') || null },
+		],
+	}
+}
+
+const relayDiagnosticRuns = new Map()
+
+function pruneRelayDiagnosticRuns() {
+	const cutoff = Date.now() - 10 * 60 * 1000
+	for (const [id, run] of relayDiagnosticRuns) {
+		if ((run.updatedAt || run.startedAt || 0) < cutoff) relayDiagnosticRuns.delete(id)
+	}
+}
+
 const routes = {
 	'GET /api/state': async () => {
 		const storedProviders = readStore()
@@ -2396,12 +3041,19 @@ const routes = {
 		const providers = syncWithConfig(storedProviders)
 		let storeChanged = providers.some((p) => p.installed !== installedBefore.get(p.id))
 		for (const provider of providers) {
-			const needsBridge = provider.useBridge || provider.lastTest?.verdict === 'chat_only' || provider.lastTest?.verdict === 'no_responses' || (provider.model && provider.modelResults?.[provider.model] && provider.modelResults[provider.model].target !== 'responses')
-			if (!provider.installed || !needsBridge || !provider.model) continue
-			if (!provider.useBridge) {
-				provider.useBridge = true
+			const needsBridge = providerNeedsBridge(provider)
+			if (Boolean(provider.useBridge) !== needsBridge) {
+				provider.useBridge = needsBridge
 				storeChanged = true
 			}
+			if (!needsBridge) {
+				stopBridge(provider.id)
+				if (provider.installed && provider.model && preferredModelProtocol(provider) === 'responses') {
+					const configured = stripQuotes(new TomlDoc(readConfig()).get(`model_providers.${provider.id}`, 'base_url'))
+					if (configured !== provider.baseUrl) install(provider, providers)
+				}
+			}
+			if (!provider.installed || !needsBridge || !provider.model) continue
 			const bridge = await startBridge(provider)
 			if (provider.bridgePort !== bridge.port) {
 				provider.bridgePort = bridge.port
@@ -2458,128 +3110,161 @@ const routes = {
 		const messages = Array.isArray(body.messages) && body.messages.length ? body.messages : [{ role: 'user', content: String(body.prompt || 'Hola') }]
 
 		const started = Date.now()
-		const isClaude = /claude/i.test(model)
-		let anthRes = null
-
-		// 1. Si es modelo Claude, probamos primero /v1/messages (Anthropic)
-		if (isClaude) {
-			anthRes = await probeSmart(endpoint(baseUrl, '/messages'), {
-				apiKey,
-				method: 'POST',
-				timeout: 30000,
-				extraHeaders: {
-					'anthropic-version': '2023-06-01',
-					'x-api-key': apiKey,
-					'User-Agent': 'claude-cli/1.0.0',
-				},
-				json: {
-					model,
-					max_tokens: 1024,
-					system: messages
-						.filter((m) => m.role === 'system')
-						.map((m) => String(m.content))
-						.join('\n') || undefined,
-					messages: messages
-						.filter((m) => m.role !== 'system')
-						.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content) })),
-				},
-			})
-			if (anthRes.ok && !anthRes.json?.error) {
-				const contentArr = anthRes.json?.content || []
-				const replyText = contentArr.map((c) => (typeof c === 'string' ? c : c.text || '')).join('').trim()
-				if (replyText) {
-					return {
-						ok: true,
-						model,
-						protocol: 'anthropic',
-						ms: Date.now() - started,
-						retries: anthRes.retries || 0,
-						reply: replyText,
-					}
-				}
-			}
-		}
-
 		const CHAT_MAX_MS = 30000
 		const remaining = () => CHAT_MAX_MS - (Date.now() - started)
-
 		const effort = body.effort || stored?.effort || 'high'
+		const rawTarget = stored?.modelResults?.[model]?.target || ''
+		const detectedProtocol = rawTarget === 'claude'
+			? 'anthropic'
+			: ['anthropic', 'chat', 'responses'].includes(rawTarget)
+				? rawTarget
+				: ''
+		const inferredProtocol = /claude/i.test(model) ? 'anthropic' : ''
+		const fallbackProtocols = detectedProtocol === 'anthropic' || inferredProtocol === 'anthropic'
+			? ['anthropic', 'chat', 'responses']
+			: ['chat', 'responses']
+		const protocolOrder = [...new Set([detectedProtocol, inferredProtocol, ...fallbackProtocols].filter(Boolean))]
+		const failures = []
 
-		// 2. Probar OpenAI /chat/completions
-		let chatRes = null
-		if (remaining() >= 2000) {
-			const chatPayload = {
-				model,
-				messages: messages.map((m) => ({ role: m.role, content: String(m.content) })),
-				max_tokens: 1024,
-				stream: false,
-			}
-			if (effort) chatPayload.reasoning_effort = effort
-
-			chatRes = await probeSmart(endpoint(baseUrl, '/chat/completions'), {
-				apiKey,
-				method: 'POST',
-				timeout: Math.max(remaining(), 5000),
-				json: chatPayload,
-			})
-			if (chatRes.ok && !chatRes.json?.error) {
-				const replyText = (chatRes.json?.choices?.[0]?.message?.content || '').trim()
-				if (replyText) {
-					return {
-						ok: true,
+		for (const protocol of protocolOrder) {
+			if (remaining() < 1000) break
+			let result
+			let replyText = ''
+			if (protocol === 'anthropic') {
+				result = await probeSmart(endpoint(baseUrl, '/messages'), {
+					apiKey,
+					method: 'POST',
+					timeout: remaining(),
+					extraHeaders: {
+						'anthropic-version': '2023-06-01',
+						'x-api-key': apiKey,
+						'User-Agent': 'claude-cli/1.0.0',
+					},
+					json: {
 						model,
-						protocol: 'chat',
-						ms: Date.now() - started,
-						retries: chatRes.retries || 0,
-						reply: replyText,
-						effort: effort || null,
-					}
+						max_tokens: 1024,
+						...(effort ? { output_config: { effort } } : {}),
+						system: messages.filter((m) => m.role === 'system').map((m) => String(m.content)).join('\n') || undefined,
+						messages: messages
+							.filter((m) => m.role !== 'system')
+							.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content) })),
+					},
+				})
+				if (result.ok && !result.json?.error) {
+					const content = Array.isArray(result.json?.content) ? result.json.content : []
+					replyText = content.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('').trim()
+				}
+			} else if (protocol === 'responses') {
+				const payload = {
+					model,
+					input: messages.map((m) => ({
+						role: ['assistant', 'system'].includes(m.role) ? m.role : 'user',
+						content: String(m.content),
+					})),
+					max_output_tokens: 1024,
+					stream: false,
+				}
+				if (effort) payload.reasoning = { effort }
+				result = await probeSmart(endpoint(baseUrl, '/responses'), {
+					apiKey,
+					method: 'POST',
+					timeout: remaining(),
+					json: payload,
+				})
+				if (result.ok && !result.json?.error) replyText = (responseText(result.json) || '').trim()
+			} else {
+				const payload = {
+					model,
+					messages: messages.map((m) => ({ role: m.role, content: String(m.content) })),
+					max_tokens: 1024,
+					stream: false,
+				}
+				if (effort) payload.reasoning_effort = effort
+				result = await probeSmart(endpoint(baseUrl, '/chat/completions'), {
+					apiKey,
+					method: 'POST',
+					timeout: remaining(),
+					json: payload,
+				})
+				if (result.ok && !result.json?.error) replyText = String(result.json?.choices?.[0]?.message?.content || '').trim()
+			}
+
+			if (replyText) {
+				return {
+					ok: true,
+					model,
+					protocol,
+					ms: Date.now() - started,
+					retries: result.retries || 0,
+					reply: replyText,
+					effort: effort || null,
 				}
 			}
-		}
-
-		// 3. Probar /responses conservando el historial completo.
-		let respRes = null
-		if (remaining() >= 2000) {
-			const respPayload = {
-				model,
-				input: messages.map((m) => ({
-					role: ['assistant', 'system'].includes(m.role) ? m.role : 'user',
-					content: String(m.content),
-				})),
-				max_output_tokens: 1024,
-				stream: false,
-			}
-			if (effort) respPayload.reasoning_effort = effort
-
-			respRes = await probeSmart(endpoint(baseUrl, '/responses'), {
-				apiKey,
-				method: 'POST',
-				timeout: Math.max(remaining(), 5000),
-				json: respPayload,
-			})
-			if (respRes.ok && !respRes.json?.error) {
-				const replyText = (responseText(respRes.json) || '').trim()
-				if (replyText) {
-					return {
-						ok: true,
-						model,
-						protocol: 'responses',
-						ms: Date.now() - started,
-						retries: respRes.retries || 0,
-						reply: replyText,
-						effort: effort || null,
-					}
-				}
-			}
+			failures.push(result)
 		}
 
 		if (Date.now() - started >= 29000) {
 			throw new Error('Tiempo de espera agotado (30s máx). El relay tardó demasiado en responder.')
 		}
 
-		const failed = isClaude && anthRes ? anthRes : (chatRes?.httpStatus ? chatRes : (respRes || anthRes || chatRes))
+		const failed = failures.find((result) => result?.json?.error || result?.json?.message) || failures[0]
 		throw new Error(apiError(failed) || `Error al consultar el modelo (HTTP ${failed?.httpStatus || 504})`)
+	},
+
+	'POST /api/relay-diagnostics': async (body) => {
+		const providers = readStore()
+		const stored = providers.find((p) => p.id === body.id)
+		if (!stored) throw new Error('Proveedor desconocido')
+		const model = body.model || stored.model
+		if (!model) throw new Error('Elige un modelo para analizar')
+		const runId = String(body.runId || crypto.randomUUID())
+		const tracked = /^[a-zA-Z0-9_-]{8,100}$/.test(runId)
+		pruneRelayDiagnosticRuns()
+		if (tracked) {
+			const now = Date.now()
+			relayDiagnosticRuns.set(runId, {
+				status: 'running', stage: 'preparing', stageStatus: 'running',
+				detail: 'Iniciando el diagnóstico.', startedAt: now, updatedAt: now,
+				stages: { preparing: { status: 'running', detail: 'Iniciando el diagnóstico.', startedAt: now } },
+				events: [], nextEventSeq: 1,
+			})
+		}
+		try {
+			const report = await runRelayDiagnostics(stored, model, tracked ? (event) => {
+				const current = relayDiagnosticRuns.get(runId)
+				if (current) {
+					const previous = current.stages?.[event.stage] || {}
+					const sequencedEvent = { ...event, seq: current.nextEventSeq || 1 }
+					const stageState = {
+						...previous,
+						status: event.state,
+						detail: event.detail,
+						startedAt: event.state === 'running' ? event.updatedAt : previous.startedAt || event.updatedAt,
+						...(['done', 'failed', 'skipped'].includes(event.state) ? { finishedAt: event.updatedAt } : {}),
+					}
+					relayDiagnosticRuns.set(runId, {
+						...current, stage: event.stage, stageStatus: event.state,
+						detail: event.detail, updatedAt: event.updatedAt, status: 'running',
+						stages: { ...(current.stages || {}), [event.stage]: stageState },
+						events: [...(current.events || []), sequencedEvent],
+						nextEventSeq: sequencedEvent.seq + 1,
+					})
+				}
+			} : null)
+			if (tracked) {
+				const current = relayDiagnosticRuns.get(runId)
+				const finishedAt = Date.now()
+				report.execution = { startedAt: current.startedAt, finishedAt, stages: current.stages || {}, events: current.events || [] }
+				relayDiagnosticRuns.set(runId, { ...current, status: 'complete', stage: 'complete', detail: 'Diagnóstico completado.', updatedAt: finishedAt })
+			}
+			return report
+		} catch (error) {
+			if (tracked) {
+				const current = relayDiagnosticRuns.get(runId)
+				relayDiagnosticRuns.set(runId, { ...current, status: 'error', detail: String(error?.message || error), updatedAt: Date.now() })
+			}
+			throw error
+		}
 	},
 
 	'POST /api/test': async (body) => {
@@ -2589,21 +3274,11 @@ const routes = {
 		const report = await runTest({
 			baseUrl: body.baseUrl || stored?.baseUrl,
 			apiKey: body.apiKey || stored?.apiKey,
-			model: body.model || stored?.model,
+			model: body.model || (stored?.installed ? stored.model : '') || '',
 		})
 		if (stored) {
-			const resMap = { ...(stored.modelResults || {}) }
-			for (const a of report.attempts || []) {
-				resMap[a.model] = {
-					model: a.model,
-					ok: a.ok,
-					httpStatus: a.httpStatus,
-					detail: a.detail,
-					reason: a.ok ? null : a.unavailable ? 'sin canal' : a.quota ? 'cuota agotada' : a.ambiguous ? 'no acepta este modelo' : 'error',
-				}
-			}
 			const needsBridge = report.verdict === 'chat_only' || report.verdict === 'no_responses'
-			const chosenModel = stored.model || report.testedModel || ''
+			const chosenModel = stored.model || (needsBridge ? (report.testedModel || '') : '')
 			const updated = {
 				...stored,
 				model: chosenModel,
@@ -2616,8 +3291,9 @@ const routes = {
 					checks: report.checks,
 					supports: report.supports,
 				},
-				modelResults: resMap,
+				modelResults: stored.modelResults || {},
 			}
+			updated.useBridge = providerNeedsBridge(updated)
 			providers[index] = updated
 
 			const active = stripQuotes(new TomlDoc(readConfig()).get(null, 'model_provider')) === stored.id
@@ -2712,6 +3388,10 @@ const routes = {
 		const connectionChanged = Boolean(
 			previous && (previous.baseUrl !== baseUrl || (body.apiKey && body.apiKey.trim() !== previous.apiKey)),
 		)
+		if (connectionChanged) {
+			memoryModelResults.delete(id)
+			memorySupports.delete(id)
+		}
 		const provider = {
 			id,
 			label: body.label.trim(),
@@ -2737,6 +3417,7 @@ const routes = {
 			modelResults: connectionChanged ? {} : previous?.modelResults || {},
 			supports: connectionChanged ? null : previous?.supports || null,
 		}
+		provider.useBridge = providerNeedsBridge(provider)
 		if (index >= 0) providers[index] = provider
 		else providers.push(provider)
 
@@ -2863,15 +3544,19 @@ const routes = {
 		const provider = { ...providers[index], model: String(body.model || '').trim() }
 		providers[index] = provider
 
-		const needsBridge = provider.useBridge || provider.lastTest?.verdict === 'chat_only' || provider.lastTest?.verdict === 'no_responses' || (provider.model && provider.modelResults?.[provider.model] && provider.modelResults[provider.model].target !== 'responses')
-		if (needsBridge) provider.useBridge = true
+		provider.useBridge = providerNeedsBridge(provider)
 
 		let reapplied = false
 		const active = stripQuotes(new TomlDoc(readConfig()).get(null, 'model_provider')) === provider.id
+		if (active && preferredModelProtocol(provider) === 'anthropic') {
+			throw new Error('El perfil activo es de Codex y este modelo usa Anthropic Messages. Utiliza Claude Code o elige un modelo Chat/Responses para ese perfil.')
+		}
 		if (active && provider.model) {
 			if (provider.useBridge) {
 				const bridge = await startBridge(provider)
 				provider.bridgePort = bridge.port
+			} else {
+				stopBridge(provider.id)
 			}
 			install(provider, providers)
 			reapplied = true
@@ -2917,60 +3602,44 @@ const routes = {
 		const effort = String(body.effort || p.effort || 'high').trim()
 		const apiKey = p.apiKey
 		const baseUrl = p.baseUrl
+		if (!baseUrl || !apiKey) throw new Error('Faltan baseUrl o apiKey')
 		const started = Date.now()
-
-		const chatPayload = {
-			model,
-			messages: [{ role: 'user', content: '1' }],
-			max_tokens: 1,
-			stream: false,
+		const preferred = preferredModelProtocol(p, model)
+		const protocols = [...new Set([preferred, 'responses', 'chat', 'anthropic'].filter(Boolean))]
+		let last = null
+		let usedProtocol = null
+		for (const protocol of protocols) {
+			usedProtocol = protocol
+			const messages = [{ role: 'user', content: 'Reply with OK.' }]
+			const json = protocol === 'anthropic'
+				? { model, messages, max_tokens: 128, output_config: { effort } }
+				: protocol === 'responses'
+					? { model, input: messages, max_output_tokens: 128, reasoning: { effort } }
+					: { model, messages, max_tokens: 128, reasoning_effort: effort }
+			const route = protocol === 'anthropic' ? '/messages' : protocol === 'responses' ? '/responses' : '/chat/completions'
+			const query = (stream) => probeSmart(endpoint(baseUrl, route), {
+				apiKey, method: 'POST', timeout: 12000,
+				sse: stream, completeSse: stream,
+				json: { ...json, stream },
+				...(protocol === 'anthropic' ? { extraHeaders: { 'anthropic-version': '2023-06-01', 'x-api-key': apiKey } } : {}),
+			})
+			last = await query(false)
+			// Reintentar streaming solamente si el servidor lo exige expresamente.
+			if (!last.ok && /stream.{0,30}(?:required|must be true)|must.{0,30}stream/i.test(apiError(last))) last = await query(true)
+			const data = last.json
+			const shaped = protocol === 'anthropic' ? Array.isArray(data?.content)
+				: protocol === 'responses' ? Array.isArray(data?.output) || typeof data?.output_text === 'string'
+					: Array.isArray(data?.choices) && data.choices.length > 0
+			if (last.ok && !data?.error && data?.status !== 'failed' && shaped) {
+				return { ok: true, ms: Date.now() - started, effort, protocol, httpStatus: last.httpStatus,
+					detail: 'La API aceptó la solicitud con este nivel. Esto no comprueba cuánto razonamiento ejecutó el relay.' }
+			}
+			// Un rechazo del parámetro no se oculta probando otra API.
+			if (!isEndpointMissing(last) && ![404, 405].includes(last.httpStatus)) break
 		}
-		if (effort) chatPayload.reasoning_effort = effort
-
-		const chatRes = await probeSmart(endpoint(baseUrl, '/chat/completions'), {
-			apiKey,
-			method: 'POST',
-			json: chatPayload,
-			timeoutMs: 12000,
-		})
-
-		if (chatRes.ok) {
-			return { ok: true, ms: Date.now() - started, effort: effort || 'default', httpStatus: 200 }
-		}
-
-		const respPayload = {
-			model,
-			input: [{ role: 'user', content: '1' }],
-			max_output_tokens: 1,
-			stream: false,
-		}
-		if (effort) respPayload.reasoning_effort = effort
-
-		const respRes = await probeSmart(endpoint(baseUrl, '/responses'), {
-			apiKey,
-			method: 'POST',
-			json: respPayload,
-			timeoutMs: 12000,
-		})
-
-		if (respRes.ok) {
-			return { ok: true, ms: Date.now() - started, effort: effort || 'default', httpStatus: 200 }
-		}
-
-		const errMsg =
-			(chatRes.json && chatRes.json.error && chatRes.json.error.message) ||
-			(respRes.json && respRes.json.error && respRes.json.error.message) ||
-			chatRes.text ||
-			respRes.text ||
-			`Error ${chatRes.httpStatus || respRes.httpStatus || 400}`
-
-		return {
-			ok: false,
-			ms: Date.now() - started,
-			effort: effort || 'default',
-			error: errMsg,
-			httpStatus: chatRes.httpStatus || respRes.httpStatus || 400,
-		}
+		return { ok: false, ms: Date.now() - started, effort, protocol: usedProtocol,
+			error: last?.ok ? 'La API no devolvió una respuesta válida para este protocolo.' : apiError(last || {}),
+			httpStatus: last?.httpStatus || 0 }
 	},
 
 	/** Catalogo completo, para el explorador de modelos. */
@@ -3218,8 +3887,10 @@ const routes = {
 		if (!provider.model) throw new Error('Elige un modelo antes de instalar')
 		if (!provider.apiKey) throw new Error('Falta la API key')
 
-		const needsBridge = provider.useBridge || provider.lastTest?.verdict === 'chat_only' || provider.lastTest?.verdict === 'no_responses' || (provider.model && provider.modelResults?.[provider.model] && provider.modelResults[provider.model].target !== 'responses')
-		if (needsBridge) provider.useBridge = true
+		if (preferredModelProtocol(provider) === 'anthropic') {
+			throw new Error('Este modelo usa Anthropic Messages. No puede instalarse en Codex mediante el puente Chat → Responses; utiliza su conexión directa en Claude Code.')
+		}
+		provider.useBridge = providerNeedsBridge(provider)
 
 		// Si va por traductor, hay que levantarlo antes de escribir la config:
 		// el puerto real es el que acaba en base_url.
@@ -3227,6 +3898,8 @@ const routes = {
 		if (provider.useBridge) {
 			bridge = await startBridge(provider)
 			provider.bridgePort = bridge.port
+		} else {
+			stopBridge(provider.id)
 		}
 
 		let result
@@ -3259,6 +3932,10 @@ const routes = {
 		const provider = { ...providers[index] }
 		const configPath = CONFIG_PATH()
 		const current = readConfig()
+		if (preferredModelProtocol(provider) === 'anthropic') {
+			throw new Error('Este modelo usa Anthropic Messages; no es compatible con el perfil Responses de Codex.')
+		}
+		provider.useBridge = providerNeedsBridge(provider)
 
 		if (provider.useBridge) {
 			const bridge = await startBridge(provider)
@@ -3360,6 +4037,8 @@ const routes = {
 			stopBridge(body.id)
 			uninstall(provider)
 			cleanClaudeConfig(provider)
+			memoryModelResults.delete(body.id)
+			memorySupports.delete(body.id)
 			const left = providers.filter((p) => p.id !== body.id)
 			writeStore(left)
 			writeEnvFile(left)
@@ -3512,6 +4191,13 @@ const server = http.createServer(async (req, res) => {
 	// El escaneo es un stream, no cabe en el router de JSON.
 	if (req.method === 'GET' && pathname === '/api/scan') {
 		return handleScanStream(req, res, new URLSearchParams(search || ''))
+	}
+	if (req.method === 'GET' && pathname === '/api/relay-diagnostics-progress') {
+		const runId = String(new URLSearchParams(search || '').get('runId') || '')
+		const run = relayDiagnosticRuns.get(runId)
+		return run
+			? sendJson(res, 200, run)
+			: sendJson(res, 404, { error: 'Diagnóstico no encontrado o expirado' })
 	}
 
 	const handler = routes[`${req.method} ${pathname}`]

@@ -741,6 +741,32 @@ async function runChatApiSuite() {
 				assert.strictEqual(res.data.reply, 'pong', 'Debe extraer texto "pong"')
 				assert(res.data.protocol, 'Debe indicar protocolo utilizado')
 			})
+
+			const aliasPort = await getFreePort()
+			const aliasServer = createFakeProvider('claudeonly')
+			await new Promise((resolve) => aliasServer.listen(aliasPort, '127.0.0.1', resolve))
+			try {
+				await request(`http://127.0.0.1:${panelPort}/api/provider`, {
+					method: 'POST',
+					json: { label: 'Chat Claude Alias', baseUrl: `http://127.0.0.1:${aliasPort}/v1`, apiKey: 'sk-test-claude-alias', model: 'gpt-anthropic-alias' },
+				})
+				const detected = await request(`http://127.0.0.1:${panelPort}/api/test-model`, {
+					method: 'POST',
+					json: { id: 'chat-claude-alias', model: 'gpt-anthropic-alias' },
+				})
+				assert.strictEqual(detected.data.target, 'claude', 'Debe detectar que el alias GPT usa Anthropic Messages')
+				await test('/api/chat respeta el protocolo detectado aunque el alias se llame GPT', async () => {
+					const res = await request(`http://127.0.0.1:${panelPort}/api/chat`, {
+						method: 'POST',
+						json: { id: 'chat-claude-alias', messages: [{ role: 'user', content: 'Hola' }] },
+					})
+					assert(res.ok, `/api/chat debe responder por Messages: ${res.text}`)
+					assert.strictEqual(res.data.protocol, 'anthropic')
+					assert.strictEqual(res.data.reply, 'pong')
+				})
+			} finally {
+				await new Promise((resolve) => aliasServer.close(resolve))
+			}
 		} finally {
 			await new Promise((r) => fakeServer.close(r))
 		}
@@ -750,7 +776,177 @@ async function runChatApiSuite() {
 	}
 }
 
-// ----------------------------------------------------------- 7. Multiterminal y Modo YOLO
+// ----------------------------------------------------------- 7. Diagnóstico del relay
+
+async function runRelayDiagnosticsSuite() {
+	console.log('\n--- 7. Pruebas de diagnóstico del relay ---')
+	const envDirs = createTempDirs()
+	const panelPort = await getFreePort()
+	let panelProc = null
+	const fakeServers = []
+
+	try {
+		panelProc = await startPanelProcess({ panelPort, panelHome: envDirs.panelHome, codexHome: envDirs.codexHome })
+
+		async function addProvider(label, mode, options = {}) {
+			const fakePort = await getFreePort()
+			const fakeServer = createFakeProvider(mode)
+			fakeServers.push(fakeServer)
+			await new Promise((resolve) => fakeServer.listen(fakePort, '127.0.0.1', resolve))
+			const registered = await request(`http://127.0.0.1:${panelPort}/api/provider`, {
+				method: 'POST',
+				json: { label, baseUrl: `http://127.0.0.1:${fakePort}/v1`, apiKey: `sk-${mode}-test`, model: 'gpt-5.5', force: true, ...options },
+			})
+			assert(registered.ok, `Debe registrar ${label}`)
+			return registered.data.provider.id
+		}
+
+		const consistentId = await addProvider('Relay Consistent', 'relayconsistent')
+		const mismatchId = await addProvider('Relay Mismatch', 'relaymismatch')
+		const aliasId = await addProvider('Relay Alias', 'relayalias')
+		const bridgeId = await addProvider('Relay Chat Bridge', 'relaychat')
+		const wildcardId = await addProvider('Relay Wildcard', 'full')
+		const unavailableId = await addProvider('Relay Unavailable', 'hardblock')
+		const anthropicId = await addProvider('Anthropic Direct', 'claudeonly', { useBridge: true })
+
+		await test('controles consistentes informan cumplimiento observable del relay', async () => {
+			const res = await request(`http://127.0.0.1:${panelPort}/api/relay-diagnostics`, {
+				method: 'POST',
+				json: { id: consistentId, model: 'gpt-5.5' },
+			})
+			assert(res.ok, res.text)
+			assert.strictEqual(res.data.verdict, 'relay_consistent')
+			assert.strictEqual(res.data.provenance, 'intermediary')
+			assert(/CONSISTENTE/i.test(res.data.diagnosticSummary.modelSelection))
+			assert.strictEqual(res.data.controlsRun, 4)
+			const probes = Object.fromEntries(res.data.probes.map((probe) => [probe.id, probe]))
+			assert.strictEqual(probes.freshness.status, 'pass')
+			assert.strictEqual(probes.routing.status, 'pass')
+			assert.strictEqual(probes.model_metadata.status, 'pass')
+			assert.strictEqual(probes.usage.status, 'pass')
+			assert(/no determina qué modelo real/i.test(res.data.limitations))
+		})
+
+		await test('identificador devuelto incompatible produce anomalía de contrato', async () => {
+			const res = await request(`http://127.0.0.1:${panelPort}/api/relay-diagnostics`, {
+				method: 'POST',
+				json: { id: mismatchId, model: 'gpt-5.5' },
+			})
+			assert(res.ok, res.text)
+			assert.strictEqual(res.data.verdict, 'routing_anomaly')
+			assert(/CONTRADICCIÓN/i.test(res.data.diagnosticSummary.modelSelection))
+			assert.strictEqual(res.data.probes.find((probe) => probe.id === 'model_metadata').status, 'bad')
+		})
+
+		await test('alias reescrito y rechazo 503 se describen sin inferir el upstream', async () => {
+			await request(`http://127.0.0.1:${panelPort}/api/test-model`, {
+				method: 'POST',
+				json: { id: aliasId, model: 'claude-fable-5' },
+			})
+			const res = await request(`http://127.0.0.1:${panelPort}/api/relay-diagnostics`, {
+				method: 'POST',
+				json: { id: aliasId, model: 'claude-fable-5' },
+			})
+			assert(res.ok, res.text)
+			assert.strictEqual(res.data.verdict, 'relay_partial')
+			assert.strictEqual(res.data.probes.find((probe) => probe.id === 'routing').status, 'pass')
+			assert.strictEqual(res.data.probes.find((probe) => probe.id === 'model_metadata').status, 'warn')
+			assert(/mapeo del identificador/i.test(res.data.probes.find((probe) => probe.id === 'model_metadata').detail))
+		})
+
+		await test('valida ruta directa Chat y ruta Responses mediante puente', async () => {
+			const tested = await request(`http://127.0.0.1:${panelPort}/api/test-model`, {
+				method: 'POST',
+				json: { id: bridgeId, model: 'gpt-5.5' },
+			})
+			assert.strictEqual(tested.data.target, 'chat')
+			await request(`http://127.0.0.1:${panelPort}/api/set-model`, {
+				method: 'POST',
+				json: { id: bridgeId, model: 'gpt-5.5' },
+			})
+			const res = await request(`http://127.0.0.1:${panelPort}/api/relay-diagnostics`, {
+				method: 'POST',
+				json: { id: bridgeId, model: 'gpt-5.5' },
+			})
+			assert(res.ok, res.text)
+			assert.strictEqual(res.data.paths.direct.available, true)
+			assert.strictEqual(res.data.paths.direct.protocol, 'chat')
+			assert.strictEqual(res.data.paths.bridge.available, true)
+			assert.strictEqual(res.data.probes.find((probe) => probe.id === 'bridge').status, 'pass')
+			assert.strictEqual(res.data.probes.find((probe) => probe.id === 'path_consistency').status, 'pass')
+			const bridgeEvents = res.data.execution.events.filter((event) => event.stage.startsWith('bridge_'))
+			assert.deepStrictEqual(
+				bridgeEvents.map((event) => `${event.stage}:${event.state}`),
+				['bridge_first:running', 'bridge_first:done', 'bridge_second:running', 'bridge_second:done'],
+			)
+
+			const alternate = await request(`http://127.0.0.1:${panelPort}/api/relay-diagnostics`, {
+				method: 'POST',
+				json: { id: bridgeId, model: 'gpt-5.6-terra', runId: 'relay-alternate-model' },
+			})
+			assert(alternate.ok, alternate.text)
+			assert.strictEqual(alternate.data.paths.bridge.available, true)
+			assert.strictEqual(alternate.data.execution.stages.bridge_first.status, 'done')
+			assert.strictEqual(alternate.data.execution.stages.bridge_second.status, 'done')
+		})
+
+		await test('respuesta genérica y modelo aleatorio aceptado detectan contrato incumplido', async () => {
+			const res = await request(`http://127.0.0.1:${panelPort}/api/relay-diagnostics`, {
+				method: 'POST',
+				json: { id: wildcardId, model: 'gpt-5.5' },
+			})
+			assert(res.ok, res.text)
+			assert.strictEqual(res.data.verdict, 'routing_anomaly')
+			assert.strictEqual(res.data.probes.find((probe) => probe.id === 'freshness').status, 'bad')
+			assert.strictEqual(res.data.probes.find((probe) => probe.id === 'routing').status, 'bad')
+			assert.strictEqual(res.data.probes.find((probe) => probe.id === 'usage').status, 'warn')
+			assert(!/0 → 0/.test(res.data.probes.find((probe) => probe.id === 'usage').detail))
+		})
+
+		await test('un modelo Anthropic directo no ejecuta el puente Chat hacia Responses', async () => {
+			const tested = await request(`http://127.0.0.1:${panelPort}/api/test-model`, {
+				method: 'POST',
+				json: { id: anthropicId, model: 'claude-sonnet-4.5' },
+			})
+			assert.strictEqual(tested.data.target, 'claude')
+			const res = await request(`http://127.0.0.1:${panelPort}/api/relay-diagnostics`, {
+				method: 'POST',
+				json: { id: anthropicId, model: 'claude-sonnet-4.5', runId: 'anthropic-direct-diagnostic' },
+			})
+			assert(res.ok, res.text)
+			assert.strictEqual(res.data.paths.direct.protocol, 'anthropic')
+			assert.strictEqual(res.data.paths.bridge, null)
+			assert(!res.data.execution.events.some((event) => event.stage.startsWith('bridge_')))
+		})
+
+		await test('sin respuestas válidas devuelve diagnóstico inconcluso', async () => {
+			const runId = 'relay-unavailable-progress'
+			const res = await request(`http://127.0.0.1:${panelPort}/api/relay-diagnostics`, {
+				method: 'POST',
+				json: { id: unavailableId, model: 'gpt-5.5', runId },
+			})
+			assert(res.ok, res.text)
+			assert.strictEqual(res.data.verdict, 'diagnostic_inconclusive')
+			assert.strictEqual(res.data.diagnosticScope, 'insufficient')
+			assert(/Ninguna ruta/i.test(res.data.diagnosticSummary.availability))
+			assert.strictEqual(res.data.execution.stages.direct_first.status, 'failed')
+			assert.strictEqual(res.data.execution.stages.direct_second.status, 'failed')
+			assert.strictEqual(res.data.execution.stages.routing_negative.status, 'done')
+			const progress = await request(`http://127.0.0.1:${panelPort}/api/relay-diagnostics-progress?runId=${runId}`)
+			assert(progress.ok, progress.text)
+			assert.strictEqual(progress.data.status, 'complete')
+			assert.strictEqual(progress.data.stages.direct_second.status, 'failed')
+			assert.strictEqual(progress.data.stages.routing_negative.status, 'done')
+			assert(progress.data.events.some((event) => event.stage === 'analysis' && event.state === 'done'))
+		})
+	} finally {
+		for (const server of fakeServers) await new Promise((resolve) => server.close(resolve))
+		if (panelProc) panelProc.kill()
+		envDirs.cleanup()
+	}
+}
+
+// ----------------------------------------------------------- 8. Multiterminal y Modo YOLO
 
 async function runMultiterminalAndYoloSuite() {
 	console.log('\n--- 7. Pruebas de Multiterminal y Modo YOLO ---')
@@ -833,6 +1029,7 @@ async function main() {
 	await runSyncAndActiveProviderSuite()
 	await runBridgeLifecycleSuite()
 	await runChatApiSuite()
+	await runRelayDiagnosticsSuite()
 	await runMultiterminalAndYoloSuite()
 
 	const elapsed = ((Date.now() - started) / 1000).toFixed(2)

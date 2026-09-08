@@ -249,13 +249,57 @@ select option{background:#080d14;color:#c9d8e8;padding:8px 12px;font-family:var(
 @keyframes bl{0%{opacity:.2}100%{opacity:1}}
 
 .loading-spinner{
-	width:34px;height:34px;
+	display:inline-block;flex:none;width:34px;height:34px;
 	border:3px solid rgba(0,229,255,.15);
 	border-top-color:var(--cyan);
 	border-radius:50%;
 	animation:spin .8s linear infinite;
 	box-shadow:0 0 16px rgba(0,229,255,.35);
 }
+.verdict.testing .big{display:inline-flex;align-items:center;gap:11px;color:var(--amber);text-shadow:0 0 14px rgba(255,182,39,.45)}
+.live-spinner{
+	display:inline-block;flex:none;width:18px;height:18px;
+	border:2.5px solid rgba(255,182,39,.22);
+	border-top-color:var(--amber);
+	border-radius:50%;
+	animation:spin .75s linear infinite;
+	box-shadow:0 0 12px rgba(255,182,39,.4);
+}
+.live-pulse{display:inline-block;animation:bl .85s ease-in-out infinite alternate}
+.live-dot{
+	display:inline-block;width:7px;height:7px;border-radius:50%;
+	background:var(--amber);box-shadow:0 0 8px var(--amber);
+	animation:bl .65s ease-in-out infinite alternate;vertical-align:middle;
+}
+.relay-progress{width:100%;max-width:620px;padding:16px;background:#060b11;border:1px solid var(--line2);border-radius:var(--r);text-align:left}
+.relay-progress .fp-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
+.relay-progress .fp-title{font-size:12.5px;font-weight:700;color:var(--cyan);overflow-wrap:anywhere}
+.relay-progress .fp-meta{font-size:10.5px;color:var(--dim);white-space:nowrap}
+.relay-progress .fp-bar{height:5px;background:var(--pane3);border:1px solid var(--line);overflow:hidden}
+.relay-progress .fp-bar i{display:block;height:100%;background:linear-gradient(90deg,#008ca0,var(--cyan),#008ca0);background-size:200% 100%;box-shadow:var(--gc);transition:width .25s ease;animation:fpFlow 1s linear infinite}
+.relay-progress .fp-current{margin:9px 0 11px;font-size:11px;line-height:1.5;color:var(--txt2);overflow-wrap:anywhere}
+.relay-progress .fp-steps{display:grid;gap:5px}
+.relay-progress .fp-step{display:grid;grid-template-columns:16px minmax(0,1fr) auto;gap:7px;align-items:center;padding:5px 7px;border-left:2px solid var(--line);font-size:11px;color:var(--dim)}
+.relay-progress .fp-step.done{border-color:var(--lime);color:var(--txt2)}
+.relay-progress .fp-step.failed{border-color:var(--mag);color:var(--txt2)}
+.relay-progress .fp-step.skipped{border-color:var(--amber);color:var(--txt2)}
+.relay-progress .fp-step.active{border-color:var(--cyan);background:rgba(0,229,255,.05);color:#fff}
+.relay-progress .fp-step .fp-mark{font-weight:700;text-align:center}
+.relay-progress .fp-step.done .fp-mark{color:var(--lime)}
+.relay-progress .fp-step.failed .fp-mark{color:var(--mag)}
+.relay-progress .fp-step.active .fp-mark{color:var(--cyan)}
+.relay-progress .fp-step .fp-status{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);white-space:nowrap}
+.relay-progress .fp-step .fp-reason{display:block;margin-top:2px;font-size:9.5px;line-height:1.35;color:var(--amber);overflow-wrap:anywhere}
+.relay-progress .fp-step.failed .fp-reason{color:var(--mag)}
+.execution-reason{display:block;margin-top:3px;font-size:9.5px;line-height:1.4;color:var(--amber);overflow-wrap:anywhere;word-break:break-word}
+.execution-reason.failed{color:var(--mag)}
+.relay-progress .fp-step.active .fp-status{color:var(--cyan)}
+.relay-progress .fp-step.done .fp-status{color:var(--lime)}
+.relay-progress .fp-step.failed .fp-status{color:var(--mag)}
+.relay-progress .fp-step.skipped .fp-mark,.relay-progress .fp-step.skipped .fp-status{color:var(--amber)}
+.relay-progress .fp-parallel{display:inline-block;margin-right:6px;padding:1px 4px;border:1px solid rgba(0,229,255,.35);color:var(--cyan);font-size:8px;line-height:1.2;letter-spacing:.08em;text-transform:uppercase;vertical-align:1px}
+.relay-progress .fp-foot{margin-top:11px;padding-top:9px;border-top:1px solid var(--line);font-size:10.5px;color:var(--dim);line-height:1.5}
+@keyframes fpFlow{to{background-position:-200% 0}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
 .fade-in{animation:fadeIn .22s cubic-bezier(0.16, 1, 0.3, 1)}
@@ -273,7 +317,7 @@ select option{background:#080d14;color:#c9d8e8;padding:8px 12px;font-family:var(
 		<div style="display:flex;align-items:center;gap:10px">
 			<img src="/logo.png" alt="RelayDeck" style="width:30px;height:30px;border-radius:4px;object-fit:cover;filter:drop-shadow(0 0 6px rgba(0,229,255,.45))" />
 			<div>
-				<h1 style="margin:0;font:700 15px/1 var(--disp);letter-spacing:.05em;color:#fff;text-shadow:var(--gc)">RELAY<i>//</i>DECK <span style="font-size:10px;font-weight:400;color:var(--dim);margin-left:3px">v1.0</span></h1>
+				<h1 style="margin:0;font:700 15px/1 var(--disp);letter-spacing:.05em;color:#fff;text-shadow:var(--gc)">RELAY<i>//</i>DECK <span style="font-size:10px;font-weight:400;color:var(--dim);margin-left:3px">v1.1</span></h1>
 				<div style="font-size:8.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-top:2px">by <span style="color:var(--cyan)">NextKool</span></div>
 			</div>
 		</div>
@@ -616,8 +660,9 @@ function renderHeaderActive() {
 function renderTabs() {
 	$('#tabs').innerHTML = S.list.map((p) => {
 		const r = S.reports[p.id] || p.lastTest
-		const v = r?.verdict ? getVerdictView(p, r) : null
-		const dot = p.installed ? 'ok' : v ? v.cls : ''
+		const isTesting = Boolean(S.testing?.[p.id])
+		const v = (isTesting || r?.verdict) ? getVerdictView(p, r) : null
+		const dot = isTesting ? 'warn live-pulse' : p.installed ? 'ok' : v ? v.cls : ''
 		const badge = p.installed ? `<span class="tag ok" style="font-size:9px;padding:1px 4px;margin-left:4px;font-weight:700">ACTIVO</span>` : ''
 		return `<button data-a="sel" data-p="${esc(p.id)}" aria-current="${p.id === S.sel}">
 			<span class="dot ${dot}"></span>${esc(p.label)}${badge}</button>`
@@ -626,128 +671,191 @@ function renderTabs() {
 }
 
 function detectCapabilities(p, r) {
-	const modelResList = Object.values(p?.modelResults || {})
-	const curModel = p?.model || S.selectedModel?.[p?.id]
-	const curRes = curModel ? p?.modelResults?.[curModel] : null
-	const modelTarget = curRes?.target || null
+	const activeModel = curModel(p)
+	const curRes = activeModel ? (S.res?.[p?.id]?.[activeModel] || p?.modelResults?.[activeModel]) : null
+	const modelResList = Object.values({ ...(p?.modelResults || {}), ...(S.res?.[p?.id] || {}) })
+
+	// Si hay un resultado específico para el modelo seleccionado, manda su estado real
+	if (curRes && curRes.ok) {
+		const isAnthropic = curRes.target === 'claude' || curRes.protocol === 'anthropic' || resultProtocol(curRes) === 'anthropic'
+		const isResponses = curRes.target === 'responses' || curRes.protocol === 'responses' || resultProtocol(curRes) === 'responses'
+		const isChat = curRes.target === 'chat' || curRes.protocol === 'chat' || resultProtocol(curRes) === 'chat'
+		return {
+			hasAnthropic: Boolean(isAnthropic),
+			hasResponses: Boolean(isResponses),
+			hasChat: Boolean(isChat),
+		}
+	}
 
 	const hasAnthropic = Boolean(
 		(r?.supports?.anthropic ?? p?.supports?.anthropic) ||
 		(r?.checks?.anthropic?.status === 'ok' || r?.checks?.anthropic?.status === 'pass') ||
 		r?.verdict === 'claude_only' ||
-		modelTarget === 'claude' ||
-		modelResList.some((x) => (x.target === 'claude' || x.protocol === 'anthropic') && x.ok)
+		modelResList.some((x) => (x.target === 'claude' || x.protocol === 'anthropic' || resultProtocol(x) === 'anthropic') && x.ok)
 	)
 
 	const hasResponses = Boolean(
 		(r?.supports?.responses ?? p?.supports?.responses) ||
 		(r?.checks?.responses?.status === 'ok' || r?.checks?.responses?.status === 'pass') ||
 		r?.verdict === 'codex_ready' ||
-		modelTarget === 'responses' ||
-		modelResList.some((x) => (x.target === 'responses' || x.protocol === 'responses') && x.ok)
+		modelResList.some((x) => (x.target === 'responses' || x.protocol === 'responses' || resultProtocol(x) === 'responses') && x.ok)
 	)
 
 	const hasChat = Boolean(
 		(r?.supports?.chat ?? p?.supports?.chat) ||
 		(r?.checks?.chat?.status === 'ok' || r?.checks?.chat?.status === 'warn' || r?.checks?.chat?.status === 'pass') ||
 		r?.verdict === 'chat_only' ||
-		p?.useBridge === true ||
-		modelTarget === 'chat' ||
-		modelResList.some((x) => (x.target === 'chat' || x.protocol === 'chat') && x.ok)
+		modelResList.some((x) => (x.target === 'chat' || x.protocol === 'chat' || resultProtocol(x) === 'chat') && x.ok)
 	)
 
 	return { hasAnthropic, hasResponses, hasChat }
 }
 
 function getVerdictView(p, r) {
-	if (!r?.verdict) return { cls:'idle', big:'SIN PROBAR', why:'Dale a "Probar API".' }
-	const v = VERD[r.verdict] || VERD.unknown
-	const { hasAnthropic, hasResponses, hasChat } = detectCapabilities(p, r)
-
-	if (hasAnthropic && hasResponses) {
+	if (S.testing?.[p?.id]) {
 		return {
-			cls: 'ok',
-			big: 'COMPATIBLE CON AMBAS TERMINALES (DIRECTO)',
-			why: 'Conexión directa y 100% autónoma tanto en Codex CLI como en Claude Code (no requiere servidor Node).',
+			cls: 'warn',
+			big: 'PROBANDO EN VIVO...',
+			why: 'Verificando conectividad y credenciales con el relay en tiempo real (espera ~15s)...',
 		}
 	}
-	if (hasAnthropic && (hasChat || r.verdict === 'chat_only' || r.verdict === 'no_responses') && !hasResponses) {
+	if (!r?.verdict) {
 		return {
-			cls: 'info',
-			big: 'COMPATIBLE CON AMBAS TERMINALES',
-			why: 'Directo en Claude Code (sin servidor Node) y mediante puente local en Codex CLI (servidor Node activo).',
+			cls: 'idle',
+			big: 'SIN PROBAR',
+			why: 'Dale a "Probar API" para comprobar la conexión y credenciales del proveedor.',
 		}
 	}
-	if (r.verdict === 'claude_only' || (hasAnthropic && !hasChat && !hasResponses)) {
+	if (r.verdict === 'unreachable' || r.verdict === 'dead') {
 		return {
-			cls: 'info',
-			big: 'ANTHROPIC DIRECTO',
-			why: 'Conexión directa nativa con Claude Code (/v1/messages). Incompatible con Codex CLI.',
+			cls: 'bad',
+			big: 'FUERA DE LÍNEA',
+			why: 'No se pudo conectar con el relay. Verifica la URL del proveedor.',
 		}
 	}
-	return v
+	if (['invalid_key', 'client_blocked', 'no_channel', 'quota_exhausted'].includes(r.verdict)) {
+		return VERD[r.verdict] || VERD.unknown
+	}
+	return {
+		cls: 'ok',
+		big: 'EN LÍNEA',
+		why: 'El relay responde correctamente y las credenciales son válidas.',
+	}
 }
 
-function terminalComparisonHtml(p, r) {
-	if (!r?.verdict || r.verdict === 'unknown') return ''
+/* ═════════════════════════════════════════════ panel: compatibilidad por terminal (modelo) */
 
-	const { hasAnthropic, hasResponses, hasChat } = detectCapabilities(p, r)
+function paneTerminalCompat(p) {
+	const activeModel = curModel(p)
+	const curRes = activeModel ? (S.res?.[p?.id]?.[activeModel] || null) : null
+	const isTestingModel = activeModel ? Boolean(S.trying?.has(activeModel)) : false
+	const isTestingProvider = Boolean(S.testing?.[p?.id])
 
-	let codexTitle = 'Sin verificar', codexDetail = 'Pendiente de prueba', codexCls = 'dim', codexIcon = '—'
-	let claudeTitle = 'Sin verificar', claudeDetail = 'Pendiente de prueba', claudeCls = 'dim', claudeIcon = '—'
-	let advice = ''
+	let badge = activeModel ? tag('info', 'Modelo: ' + activeModel) : isTestingProvider ? tag('warn', '● Sonda activa') : tag('idle', 'Sin modelo elegido')
+	let innerContent = ''
 
-	if (hasResponses) {
-		codexTitle = 'Directo (Responses)'
-		codexDetail = '100% autónomo (sin servidor Node)'
-		codexCls = 'ok'
-		codexIcon = '✓'
-	} else if (hasChat) {
-		codexTitle = 'Puente Local (Chat)'
-		codexDetail = 'Requiere mantener Node activo (puerto 7789)'
-		codexCls = 'warn'
-		codexIcon = '⚡'
-	} else if (r.verdict === 'claude_only') {
-		codexTitle = 'Incompatible'
-		codexDetail = 'Solo soporta protocolo Anthropic'
-		codexCls = 'bad'
-		codexIcon = '✕'
-	} else {
-		codexTitle = 'No disponible'
-		codexDetail = 'Error en endpoint o clave'
-		codexCls = 'bad'
-		codexIcon = '✕'
-	}
-
-	if (hasAnthropic) {
-		claudeTitle = 'Directo (Anthropic)'
-		claudeDetail = '100% autónomo (sin servidor Node)'
-		claudeCls = 'ok'
-		claudeIcon = '✓'
-	} else if (r.verdict && r.verdict !== 'unknown' && r.verdict !== 'unreachable') {
-		claudeTitle = 'Incompatible'
-		claudeDetail = 'No implementa /v1/messages'
-		claudeCls = 'bad'
-		claudeIcon = '✕'
-	}
-
-	if (hasAnthropic && hasResponses) {
-		advice = 'Te conviene en cualquiera de las dos terminales: ambas funcionan directas y autónomas sin depender de este servidor Node.'
-	} else if (hasAnthropic && !hasResponses && hasChat) {
-		advice = 'Te conviene abrirlo en Claude Code porque funciona directo y no necesitas tener abierto este servidor. Si lo abres en Codex CLI, recuerda dejar este servidor Node encendido.'
-	} else if (!hasAnthropic && hasResponses) {
-		advice = 'Te conviene abrirlo en Codex CLI (conexión directa sin servidor Node). Este proveedor no es compatible con Claude Code.'
-	} else if (!hasAnthropic && !hasResponses && hasChat) {
-		advice = 'Solo puedes usarlo en Codex CLI mediante puente local. Debes mantener este servidor Node encendido mientras trabajes.'
-	} else if (hasAnthropic && !hasResponses && !hasChat) {
-		advice = 'Solo puedes usarlo en Claude Code (conexión directa sin servidor Node). Codex CLI no lo soporta.'
-	}
-
-	return `
-		<div style="margin:12px 0 14px;background:rgba(4,8,12,.7);border:1px solid var(--line2);border-radius:var(--r);padding:10px 12px">
-			<div style="font-size:10px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.12em;margin-bottom:8px">
-				Compatibilidad por Terminal
+	if (isTestingModel) {
+		innerContent = `
+			<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+				<div style="background:var(--pane);border:1px solid var(--line);border-radius:var(--r);padding:8px">
+					<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px">
+						<span style="font-size:11px;font-weight:700;color:var(--txt)">Codex CLI</span>
+						<span class="tag warn" style="font-size:9px;padding:1px 5px"><span class="live-dot"></span> Verificando...</span>
+					</div>
+					<div style="font-size:10.5px;color:var(--txt2);margin-top:4px">Probando /v1/responses y /chat...</div>
+				</div>
+				<div style="background:var(--pane);border:1px solid var(--line);border-radius:var(--r);padding:8px">
+					<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px">
+						<span style="font-size:11px;font-weight:700;color:var(--txt)">Claude Code</span>
+						<span class="tag warn" style="font-size:9px;padding:1px 5px"><span class="live-dot"></span> Verificando...</span>
+					</div>
+					<div style="font-size:10.5px;color:var(--txt2);margin-top:4px">Probando /v1/messages...</div>
+				</div>
 			</div>
+			<div style="margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:11px;color:var(--amber);display:flex;align-items:center;gap:6px">
+				<span class="live-spinner" style="width:13px;height:13px;border-width:2px"></span> <span class="live-pulse">Probando <strong>${esc(activeModel)}</strong> en vivo...</span>
+			</div>`
+	} else if (!activeModel && isTestingProvider) {
+		innerContent = `
+			<div class="blank" style="padding:18px 14px;border-color:rgba(255,182,39,.35);background:rgba(255,182,39,.03)">
+				<div style="display:flex;align-items:center;justify-content:center;gap:8px;font-size:12px;color:var(--amber);margin-bottom:4px">
+					<span class="live-spinner" style="width:14px;height:14px;border-width:2px"></span>
+					<span class="live-pulse" style="font-weight:600">Verificando compatibilidad en vivo...</span>
+				</div>
+				<div style="font-size:11px;color:var(--txt2)">Detectando soporte de terminales (Codex CLI y Claude Code) con la sonda de API activa.</div>
+			</div>`
+	} else if (!activeModel) {
+		innerContent = `
+			<div class="blank" style="padding:18px 14px">
+				<div style="font-size:12px;color:var(--txt2);margin-bottom:4px">Ningún modelo seleccionado</div>
+				<div style="font-size:11px;color:var(--dim)">Haz clic en cualquier modelo de la tabla inferior para ver su compatibilidad con Codex CLI y Claude Code.</div>
+			</div>`
+	} else if (!curRes || !curRes.ok) {
+		const reason = curRes ? (curRes.reason || 'No respondió') : 'Pendiente de prueba'
+		innerContent = `
+			<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+				<div style="background:var(--pane);border:1px solid var(--line);border-radius:var(--r);padding:8px">
+					<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px">
+						<span style="font-size:11px;font-weight:700;color:var(--txt)">Codex CLI</span>
+						<span class="tag dim" style="font-size:9px;padding:1px 5px">— SIN VERIFICAR</span>
+					</div>
+					<div style="font-size:10.5px;color:var(--txt2);margin-top:4px">${esc(reason)}</div>
+				</div>
+				<div style="background:var(--pane);border:1px solid var(--line);border-radius:var(--r);padding:8px">
+					<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px">
+						<span style="font-size:11px;font-weight:700;color:var(--txt)">Claude Code</span>
+						<span class="tag dim" style="font-size:9px;padding:1px 5px">— SIN VERIFICAR</span>
+					</div>
+					<div style="font-size:10.5px;color:var(--txt2);margin-top:4px">${esc(reason)}</div>
+				</div>
+			</div>
+			<div style="margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:11px;color:var(--amber);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+				<div style="display:flex;align-items:center;gap:6px">
+					<span>💡</span> <span>Este modelo no ha sido probado individualmente.</span>
+				</div>
+				<button class="b xs go" data-a="try" data-p="${esc(p.id)}" data-m="${esc(activeModel)}" style="margin-left:auto">Probar ${esc(activeModel)}</button>
+			</div>`
+	} else {
+		const isAnthropic = curRes.target === 'claude' || curRes.protocol === 'anthropic' || resultProtocol(curRes) === 'anthropic'
+		const isResponses = curRes.target === 'responses' || curRes.protocol === 'responses' || resultProtocol(curRes) === 'responses'
+		const isChat = curRes.target === 'chat' || curRes.protocol === 'chat' || resultProtocol(curRes) === 'chat'
+
+		let codexTitle = 'Incompatible', codexDetail = 'Solo soporta protocolo Anthropic', codexCls = 'bad', codexIcon = '✕'
+		let claudeTitle = 'Incompatible', claudeDetail = 'No implementa /v1/messages', claudeCls = 'bad', claudeIcon = '✕'
+		let advice = ''
+
+		if (isResponses) {
+			codexTitle = 'Directo (Responses)'
+			codexDetail = '100% autónomo (sin servidor Node)'
+			codexCls = 'ok'
+			codexIcon = '✓'
+		} else if (isChat) {
+			codexTitle = 'Puente Local (Chat)'
+			codexDetail = 'Requiere mantener Node activo (puerto 7789)'
+			codexCls = 'warn'
+			codexIcon = '⚡'
+		}
+
+		if (isAnthropic) {
+			claudeTitle = 'Directo (Anthropic)'
+			claudeDetail = '100% autónomo (sin servidor Node)'
+			claudeCls = 'ok'
+			claudeIcon = '✓'
+		}
+
+		if (isAnthropic && isResponses) {
+			advice = 'Te conviene en cualquiera de las dos terminales: ambas funcionan directas y autónomas sin depender de este servidor Node.'
+		} else if (isAnthropic && !isResponses && isChat) {
+			advice = 'Te conviene abrirlo en Claude Code porque funciona directo y no necesitas tener abierto este servidor. Si lo abres en Codex CLI, recuerda dejar este servidor Node encendido.'
+		} else if (!isAnthropic && isResponses) {
+			advice = 'Te conviene abrirlo en Codex CLI (conexión directa sin servidor Node). Este modelo no es compatible con Claude Code.'
+		} else if (!isAnthropic && !isResponses && isChat) {
+			advice = 'Solo puedes usarlo en Codex CLI mediante puente local. Debes mantener este servidor Node encendido mientras trabajes.'
+		} else if (isAnthropic && !isResponses && !isChat) {
+			advice = 'Solo puedes usarlo en Claude Code (conexión directa sin servidor Node). Codex CLI no lo soporta.'
+		}
+
+		innerContent = `
 			<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
 				<div style="background:var(--pane);border:1px solid var(--line);border-radius:var(--r);padding:8px">
 					<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px">
@@ -766,14 +874,22 @@ function terminalComparisonHtml(p, r) {
 			</div>
 			${advice ? `<div style="margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:11px;color:var(--amber);display:flex;align-items:center;gap:6px">
 				<span>💡</span> <span>${esc(advice)}</span>
-			</div>` : ''}
-		</div>`
+			</div>` : ''}`
+	}
+
+	return `<section class="pane">
+		<h2>Compatibilidad por Terminal<span class="sp"></span>${badge}</h2>
+		<div class="in">
+			${innerContent}
+		</div>
+	</section>`
 }
 
 /* ═════════════════════════════════════════════ panel: estado */
 
 function paneStatus(p) {
 	const r = S.reports[p.id] || p.lastTest
+	const isTesting = Boolean(S.testing?.[p?.id])
 	const v = getVerdictView(p, r)
 	const b = r?.checks?.billing
 	const isSentinel = Boolean(
@@ -792,19 +908,18 @@ function paneStatus(p) {
 	const cat = S.cats[p.id]
 
 	return `<section class="pane">
-		<h2>Estado<span class="sp"></span>${p.installed ? tag('ok','activo en codex') : p.inConfig ? tag('ok','en config.toml') : tag('idle','sin registrar')}</h2>
+		<h2>Estado de la API<span class="sp"></span>${p.installed ? tag('ok','activo en codex') : p.inConfig ? tag('ok','en config.toml') : tag('idle','sin registrar')}</h2>
 		<div class="in">
-			<div class="verdict ${v.cls}">
-				<span class="big">${esc(v.big)}</span>
+			<div class="verdict ${v.cls}${isTesting ? ' testing' : ''}">
+				<span class="big">${isTesting ? `<span class="live-spinner"></span><span class="live-pulse">${esc(v.big)}</span>` : esc(v.big)}</span>
 			</div>
-			<p class="hint" style="margin:-8px 0 10px">${esc(v.why)}</p>
-			${terminalComparisonHtml(p, r)}
+			<p class="hint" style="margin:-8px 0 10px">${isTesting ? '<span class="live-dot"></span> ' : ''}${esc(v.why)}</p>
 
 			<div class="facts">
 				<div><div class="k">Proveedor</div><div class="v hot">${esc(p.label)}</div></div>
-				<div><div class="k">Modelo</div><div class="v ${p.model ? '' : 'mut'}">${esc(p.model || 'sin elegir')}</div></div>
 				<div><div class="k">Modelos</div><div class="v">${cat ? cat.models.length : '—'}</div></div>
 				<div><div class="k">Saldo</div><div class="v ${isSentinel || b?.status === 'unsupported' ? 'mut' : ''}" style="${isSentinel || b?.status === 'unsupported' ? 'font-size:11.5px' : ''}">${esc(saldo)}</div></div>
+				<div><div class="k">Latencia</div><div class="v">${r?.checks?.latency?.ms ? r.checks.latency.ms + ' ms' : '—'}</div></div>
 			</div>
 
 			${b && (isSentinel || b.status === 'unsupported' || b.status === 'ok') ? `<div class="note" style="margin:10px 0 12px;padding:8px 12px;font-size:11px;line-height:1.4;border-left:2px solid var(--cyan);background:rgba(0,229,255,.05);display:flex;gap:8px;align-items:flex-start">
@@ -813,7 +928,7 @@ function paneStatus(p) {
 			</div>` : ''}
 
 			<div class="row">
-				<button class="b go" data-a="test" data-p="${esc(p.id)}">Probar API</button>
+				<button class="b go" data-a="test" data-p="${esc(p.id)}"${isTesting ? ' disabled' : ''}>${isTesting ? '<span class="live-spinner" style="width:11px;height:11px;border-width:2px;border-top-color:#04141a;border-color:rgba(4,20,26,.3);box-shadow:none"></span> Probando...' : 'Probar API'}</button>
 				<button class="b" data-a="edit" data-p="${esc(p.id)}">Editar</button>
 				<button class="b ko" data-a="del" data-p="${esc(p.id)}">Borrar</button>
 			</div>
@@ -1045,8 +1160,8 @@ function paneChat(p) {
 				<div class="note ${effortResult.ok ? 'ok' : 'bad'}" style="margin:0;padding:7px 11px;font-size:11.5px">
 					<span class="i">${effortResult.ok ? '✓' : '!'}</span>
 					<div>${effortResult.ok
-						? `Nivel <b>"${esc(effortResult.effort)}"</b> verificado y aceptado por la API (${effortResult.ms} ms).`
-						: `La API rechazó el nivel <b>"${esc(effortResult.effort)}"</b>: ${esc(effortResult.error)}`}</div>
+						? `Solicitud con nivel <b>"${esc(effortResult.effort)}"</b> aceptada por ${esc(effortResult.protocol || 'la API')} (${effortResult.ms} ms). Esto no verifica el razonamiento interno.`
+						: `No se pudo comprobar el nivel <b>"${esc(effortResult.effort)}"</b>: ${esc(effortResult.error)}`}</div>
 				</div>
 			` : ''}
 
@@ -1076,6 +1191,286 @@ function paneChat(p) {
 				}
 				<button class="b" type="button" data-a="chatclear" data-p="${esc(p.id)}" data-m="${esc(m)}" ${isSending ? 'disabled' : ''}>Limpiar</button>
 			</form>
+		</div>`
+}
+
+/* ═════════════════════════════════════════════ panel: diagnostico del relay */
+
+function relayProgressStages(useBridge) {
+	return [
+		{ id: 'preparing', label: 'Preparar rutas y nonces', detail: 'Preparando nonces, rutas y protocolo preferido del modelo.' },
+		{ id: 'direct_first', label: 'Frescura directa: desafío A', detail: 'Enviando el primer desafío de frescura por la ruta directa.' },
+		{ id: 'direct_second', label: 'Frescura directa: desafío B y tokens', detail: 'Contrastando una segunda entrada, el nonce y los contadores de tokens.' },
+		{ id: 'routing_negative', label: 'Control con modelo inexistente', detail: 'Enviando un modelo aleatorio para detectar remapeo o selección ignorada.', parallel: true },
+		{ id: 'model_metadata', label: 'Consultar metadatos declarados', detail: 'Consultando el registro de metadatos del modelo ofrecido.', parallel: true },
+		...(useBridge ? [
+			{ id: 'bridge_first', label: 'Puente local: desafío A', detail: 'Comprobando la primera respuesta mediante el puente local.' },
+			{ id: 'bridge_second', label: 'Puente local: desafío B', detail: 'Contrastando la segunda respuesta del puente con la ruta directa.' },
+		] : []),
+		{ id: 'analysis', label: 'Cruzar resultados y cerrar diagnóstico', detail: 'Cruzando rutas, nonces, selección, tokens, protocolo e identificadores.' },
+	]
+}
+
+function relayDiagnosticUsesBridge(provider, model) {
+	const tested = provider?.modelResults?.[model]
+	if (tested?.ok && tested.target) return tested.target === 'chat'
+	const supports = provider?.supports || provider?.lastTest?.supports || {}
+	if (supports.responses) return false
+	if (supports.chat) return true
+	if (supports.anthropic) return false
+	return provider?.useBridge === true
+}
+
+function relayStageDuration(stage) {
+	if (!stage?.startedAt) return ''
+	const elapsed = Math.max(0, (stage.finishedAt || Date.now()) - stage.startedAt)
+	return elapsed < 1000 ? `${elapsed}ms` : `${(elapsed / 1000).toFixed(1)}s`
+}
+
+function relayStageRows(stages, states) {
+	return stages.map((step) => {
+		const stage = states[step.id]
+		const state = stage?.status === 'running' ? 'active' : stage?.status || 'pending'
+		const duration = relayStageDuration(stage)
+		return `<div class="fp-step ${state}" data-fp-stage="${step.id}">
+			<span class="fp-mark" data-fp-mark>${state === 'done' ? '✓' : state === 'failed' ? '✕' : state === 'skipped' ? '−' : state === 'active' ? '●' : '·'}</span>
+			<span>${step.parallel ? '<span class="fp-parallel">paralelo</span> ' : ''}${esc(step.label)}<small class="fp-reason" data-fp-reason>${['failed', 'skipped'].includes(state) ? esc(stage?.detail || 'La etapa no pudo completarse.') : ''}</small></span>
+			<span class="fp-status" data-fp-status>${state === 'done' ? `ejecutada · ${duration || '0ms'}` : state === 'failed' ? `falló · ${duration || '0ms'}` : state === 'skipped' ? 'omitida' : state === 'active' ? `${duration || '0ms'} · en curso` : 'pendiente'}</span>
+		</div>`
+	}).join('')
+}
+
+function updateRelayProgressDisplay(key, useBridge) {
+	const card = $('.relay-progress')
+	if (!card || card.dataset.relayProgress !== key) return
+	const progress = S.relayDiagnosticsProgress?.[key] || {}
+	const plannedBridge = progress.useBridge ?? useBridge
+	const stages = relayProgressStages(plannedBridge)
+	const states = progress.stages || {}
+	if (card.dataset.useBridge !== String(Boolean(plannedBridge))) {
+		const list = $('.fp-steps', card)
+		if (list) list.innerHTML = relayStageRows(stages, states)
+		card.dataset.useBridge = String(Boolean(plannedBridge))
+	}
+	const processed = stages.filter((step) => ['done', 'failed', 'skipped'].includes(states[step.id]?.status)).length
+	const active = stages.filter((step) => states[step.id]?.status === 'running')
+	const elapsed = Math.max(0, Math.floor((Date.now() - (progress.startedAt || Date.now())) / 1000))
+	const pending = stages.filter((step) => !states[step.id]).length
+	const percent = progress.status === 'complete'
+		? 100
+		: Math.min(98, Math.max(3, Math.round(((processed + active.length * 0.15) / stages.length) * 100)))
+	const detail = active.length
+		? active.map((step) => states[step.id]?.detail || step.detail).join(' · ')
+		: progress.detail || 'Preparando el diagnóstico.'
+	const meta = $('[data-fp-meta]', card)
+	const bar = $('[data-fp-bar]', card)
+	const currentLabel = $('[data-fp-current-label]', card)
+	const detailNode = $('[data-fp-detail]', card)
+	const pendingNode = $('[data-fp-pending]', card)
+	if (meta) meta.textContent = `${elapsed}s · ${processed}/${stages.length} procesadas`
+	if (bar) bar.style.width = `${percent}%`
+	if (currentLabel) currentLabel.textContent = active.length ? 'En curso:' : 'Último evento:'
+	if (detailNode) detailNode.textContent = detail
+	if (pendingNode) pendingNode.textContent = `${pending} ${pending === 1 ? 'etapa aún no iniciada' : 'etapas aún no iniciadas'}.`
+	for (const step of stages) {
+		const row = $(`[data-fp-stage="${step.id}"]`, card)
+		if (!row) continue
+		const stage = states[step.id]
+		const state = stage?.status === 'running' ? 'active' : stage?.status || 'pending'
+		const duration = relayStageDuration(stage)
+		row.className = `fp-step ${state}`
+		const mark = $('[data-fp-mark]', row)
+		const status = $('[data-fp-status]', row)
+		const reason = $('[data-fp-reason]', row)
+		if (mark) mark.textContent = state === 'done' ? '✓' : state === 'failed' ? '✕' : state === 'skipped' ? '−' : state === 'active' ? '●' : '·'
+		if (status) status.textContent = state === 'done'
+			? `ejecutada${duration ? ` · ${duration}` : ''}`
+			: state === 'failed'
+				? `falló${duration ? ` · ${duration}` : ''}`
+				: state === 'skipped'
+					? 'omitida'
+					: state === 'active'
+						? `${duration || '0ms'} · en curso`
+						: 'pendiente'
+		if (reason) reason.textContent = ['failed', 'skipped'].includes(state) ? stage?.detail || 'La etapa no pudo completarse.' : ''
+	}
+}
+
+function paneRelayDiagnostics(p) {
+	const m = curModel(p)
+	if (!m) {
+		return `<div class="in"><div class="blank"><b>Selecciona un modelo primero</b>
+			Elige un modelo en la tabla de la izquierda para diagnosticar su ruta y el comportamiento del relay.</div></div>`
+	}
+	const diagnosticKey = p.id + ':' + m
+	const isRunning = S.relayDiagnosticsRunning?.[diagnosticKey]
+	const report = S.relayDiagnostics?.[diagnosticKey]
+	const progress = S.relayDiagnosticsProgress?.[diagnosticKey] || {}
+	const useDiagnosticBridge = isRunning
+		? progress.useBridge ?? relayDiagnosticUsesBridge(p, m)
+		: report?.paths ? Boolean(report.paths.bridge) : relayDiagnosticUsesBridge(p, m)
+	const progressStages = relayProgressStages(useDiagnosticBridge)
+	const stageStates = progress.stages || {}
+	const reportStageStates = report?.execution?.stages || {}
+	const diagnostic = report?.diagnosticSummary || {}
+	const resultColor = report?.verdictCls === 'ok' ? 'var(--lime)' : report?.verdictCls === 'bad' ? 'var(--mag)' : 'var(--amber)'
+	const progressComplete = progress.status === 'complete'
+	const processedCount = progressStages.filter((step) => ['done', 'failed', 'skipped'].includes(stageStates[step.id]?.status)).length
+	const activeStages = progressStages.filter((step) => stageStates[step.id]?.status === 'running')
+	const activeCount = activeStages.length
+	const activeDetail = activeStages.length
+		? activeStages.map((step) => stageStates[step.id]?.detail || step.detail).join(' · ')
+		: progress.detail || 'Preparando el diagnóstico.'
+	const progressPercent = progressComplete
+		? 100
+		: Math.min(98, Math.max(3, Math.round(((processedCount + activeCount * 0.15) / progressStages.length) * 100)))
+	const progressElapsed = Math.max(0, Math.floor((Date.now() - (progress.startedAt || Date.now())) / 1000))
+	const progressRemaining = progressStages.filter((step) => !stageStates[step.id]).length
+	const scopeLabel = report?.diagnosticScope === 'official_endpoint'
+		? 'ENDPOINT OFICIAL'
+		: report?.diagnosticScope === 'anomalous'
+			? 'ANÓMALA'
+			: report?.diagnosticScope === 'insufficient'
+				? 'INSUFICIENTE'
+				: 'RELAY LIMITADO'
+	const probeTone = (status) => status === 'bad' ? 'bad' : status === 'warn' ? 'warn' : status === 'pass' ? 'ok' : 'info'
+	const probeLabel = (status) => status === 'bad'
+		? '✕ Anomalía'
+		: status === 'warn'
+			? '! No concluyente'
+			: status === 'pass'
+				? '✓ Consistente'
+				: '· Informativo'
+
+	return `
+		<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:#05090f;border-bottom:1px solid var(--line2);flex-wrap:wrap">
+			<div>
+				<div style="font-size:12px;font-weight:700;color:#fff;letter-spacing:.02em">
+					Diagnóstico del relay y enrutamiento
+				</div>
+				<div style="font-size:11px;color:var(--dim);margin-top:2px">
+					Comprueba selección de modelo, frescura, protocolos, metadatos y coherencia entre rutas.
+				</div>
+			</div>
+			<button class="b go" type="button" data-a="run-relay-diagnostics" data-p="${esc(p.id)}" data-m="${esc(m)}" ${isRunning ? 'disabled' : ''} style="display:inline-flex;align-items:center;gap:6px">
+				${isRunning ? '<span class="blink">●</span> Ejecutando controles...' : 'Ejecutar diagnóstico'}
+			</button>
+		</div>
+
+		<div class="in" style="display:flex;flex-direction:column;gap:12px;overflow-y:auto">
+			${isRunning ? `
+				<div style="padding:18px 8px;display:flex;justify-content:center">
+					<div class="relay-progress" data-relay-progress="${esc(diagnosticKey)}" data-use-bridge="${Boolean(useDiagnosticBridge)}" role="status" aria-live="polite">
+						<div class="fp-head">
+							<div class="fp-title" style="display:flex;align-items:center;gap:8px"><span class="loading-spinner" style="width:17px;height:17px;border-width:2px;box-shadow:none"></span> Diagnosticando ${esc(m)}</div>
+							<div class="fp-meta" data-fp-meta>${progressElapsed}s · ${processedCount}/${progressStages.length} procesadas</div>
+						</div>
+						<div class="fp-bar"><i data-fp-bar style="width:${progressPercent}%"></i></div>
+						<div class="fp-current">
+							<strong style="color:#fff" data-fp-current-label>${activeStages.length ? 'En curso:' : 'Último evento:'}</strong> <span data-fp-detail>${esc(activeDetail)}</span><br>
+							<span data-fp-pending style="color:var(--cyan)">${progressRemaining} ${progressRemaining === 1 ? 'etapa aún no iniciada' : 'etapas aún no iniciadas'}.</span>
+						</div>
+						<div class="fp-steps">
+							${relayStageRows(progressStages, stageStates)}
+						</div>
+						<div class="fp-foot">
+							Tiempo transcurrido: ${progressElapsed}s. Los controles marcados como paralelo comienzan juntos y pueden finalizar fuera del orden visual. Los estados y duraciones provienen del backend.
+						</div>
+					</div>
+				</div>
+			` : ''}
+
+			${!isRunning && !report ? `
+				<div class="blank" style="padding:36px 20px;text-align:center">
+					<div style="font-weight:700;font-size:13px;color:#fff;margin-bottom:6px">
+						Sin diagnóstico realizado para ${esc(m)}
+					</div>
+					<div style="font-size:11.5px;color:var(--dim);max-width:480px;margin:auto;line-height:1.55">
+						El diagnóstico usa hasta ${useDiagnosticBridge ? '5' : '3'} generaciones potencialmente facturables y una consulta de metadatos. ${useDiagnosticBridge ? 'Contrasta la conexión Chat directa con su traducción mediante el puente local. ' : ''}Evalúa el relay; no identifica el modelo real que existe detrás.
+					</div>
+				</div>
+			` : ''}
+
+			${!isRunning && report ? `
+				<div class="note ${report.verdictCls}" style="display:flex;flex-direction:column;gap:9px;margin:0;padding:14px 16px;border-radius:var(--r)">
+					<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid rgba(255,255,255,.08);padding-bottom:9px">
+						<div>
+							<div style="font-size:10px;font-weight:700;letter-spacing:.12em;color:var(--dim)">RESULTADO DEL DIAGNÓSTICO</div>
+							<div style="margin-top:3px;font-size:15px;font-weight:900;color:${resultColor};overflow-wrap:anywhere">${esc(diagnostic.conclusion || report.verdictTitle)}</div>
+						</div>
+						<span class="tag ${report.verdictCls}" style="font-size:11px;font-weight:800;padding:3px 9px;white-space:nowrap">
+							ALCANCE: ${scopeLabel}
+						</span>
+					</div>
+					<div style="display:grid;grid-template-columns:minmax(155px,auto) minmax(0,1fr);gap:8px 12px;font-size:11.5px;line-height:1.55;min-width:0">
+						<div style="color:var(--dim);font-weight:700">ENDPOINT</div>
+						<div style="color:#fff;overflow-wrap:anywhere">${esc(report.provider || p.label)} · ${esc(p.baseUrl || '')}</div>
+						<div style="color:var(--dim);font-weight:700">MODELO SOLICITADO</div>
+						<div style="color:#fff;font-weight:800;overflow-wrap:anywhere">${esc(report.model || m)}</div>
+						<div style="color:var(--dim);font-weight:700">DISPONIBILIDAD</div>
+						<div style="color:#fff;overflow-wrap:anywhere">${esc(diagnostic.availability || 'No determinada.')}</div>
+						<div style="color:var(--dim);font-weight:700">SELECCIÓN DEL MODELO</div>
+						<div style="color:#fff;overflow-wrap:anywhere">${esc(diagnostic.modelSelection || 'No comprobable.')}</div>
+						<div style="color:var(--dim);font-weight:700">FRESCURA</div>
+						<div style="color:var(--txt2);overflow-wrap:anywhere">${esc(diagnostic.freshness || 'No comprobable.')}</div>
+						<div style="color:var(--dim);font-weight:700">MODELO INEXISTENTE</div>
+						<div style="color:var(--txt2);overflow-wrap:anywhere">${esc(diagnostic.invalidModel || 'No comprobable.')}</div>
+						<div style="color:var(--dim);font-weight:700">DIRECTO ↔ PUENTE</div>
+						<div style="color:var(--txt2);overflow-wrap:anywhere">${esc(diagnostic.routeComparison || 'No configurado.')}</div>
+						<div style="color:var(--dim);font-weight:700">QUÉ SIGNIFICA</div>
+						<div style="color:${resultColor};font-weight:700;overflow-wrap:anywhere">${esc(diagnostic.meaning || report.verdictDesc)}</div>
+					</div>
+					<div style="font-size:11px;color:var(--dim);margin-top:2px">
+						Completado en ${report.ms} ms · ${report.controlsRun || 0} controles · resultado operativo del relay.
+					</div>
+					${report.limitations ? `<div style="font-size:11px;color:var(--amber);line-height:1.5">Límite: ${esc(report.limitations)}</div>` : ''}
+				</div>
+
+				${Object.keys(reportStageStates).length ? `
+					<div style="padding:11px 13px;background:#04080c;border:1px solid var(--line2);border-radius:var(--r)">
+						<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px">
+							<span style="font-size:11.5px;font-weight:700;color:#fff">Ejecución real de controles</span>
+							<span class="tag info">medido por backend</span>
+						</div>
+						<div style="display:grid;gap:5px">
+							${progressStages.map((step) => {
+								const stage = reportStageStates[step.id]
+								const status = stage?.status || 'skipped'
+								const duration = relayStageDuration(stage)
+								const statusColor = status === 'done' ? 'var(--lime)' : status === 'failed' ? 'var(--mag)' : 'var(--amber)'
+								const statusMark = status === 'done' ? '✓' : status === 'failed' ? '✕' : '−'
+								const statusText = status === 'done' ? `ejecutada · ${duration || '0ms'}` : status === 'failed' ? `falló · ${duration || '0ms'}` : 'omitida'
+								return `<div style="display:grid;grid-template-columns:15px minmax(0,1fr) auto;gap:7px;align-items:start;font-size:10.5px;color:var(--txt2)">
+									<span style="color:${statusColor};font-weight:700">${statusMark}</span>
+									<span>${step.parallel ? '<span class="fp-parallel">paralelo</span> ' : ''}${esc(step.label)}${['failed', 'skipped'].includes(status) && stage?.detail ? `<small class="execution-reason ${status}">${esc(stage.detail)}</small>` : ''}</span>
+									<span style="color:${statusColor};white-space:nowrap">${statusText}</span>
+								</div>`
+							}).join('')}
+						</div>
+					</div>
+				` : ''}
+
+				<div style="display:flex;flex-direction:column;gap:8px">
+					${(report.probes || []).map((pr) => `
+						<div style="min-width:0;max-width:100%;overflow:hidden;padding:10px 12px;background:#04080c;border:1px solid ${pr.status === 'bad' ? 'var(--mag)' : pr.status === 'warn' ? 'var(--amber)' : 'var(--line2)'};border-radius:var(--r);box-sizing:border-box">
+							<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">
+								<span style="font-size:11.5px;font-weight:700;color:#fff">${esc(pr.name)}${pr.scope ? ` <span style="color:var(--dim);font-weight:400">[alcance: ${esc(pr.scope)}]</span>` : ''}</span>
+								<span class="tag ${probeTone(pr.status)}" style="font-size:10px">
+									${probeLabel(pr.status)}
+								</span>
+							</div>
+							<div style="min-width:0;max-width:100%;font-size:11px;color:var(--txt2);line-height:1.5;overflow-wrap:anywhere;word-break:break-word">
+								${esc(pr.detail)}
+							</div>
+							${pr.evidence ? `
+								<div style="display:block;width:100%;min-width:0;max-width:100%;box-sizing:border-box;overflow:hidden;margin-top:6px;padding:6px 9px;background:rgba(0,0,0,.4);border:1px solid var(--line);border-radius:3px;font-size:10.5px;font-family:var(--mono);color:var(--cyan);white-space:normal;overflow-wrap:anywhere;word-break:break-all">
+									<b>Observación:</b> ${esc(pr.evidence)}
+								</div>
+							` : ''}
+						</div>
+					`).join('')}
+				</div>
+			` : ''}
 		</div>`
 }
 
@@ -1276,9 +1671,9 @@ function paneUse(p) {
 	const effortOk = Boolean(effortRes?.ok)
 
 	const isOnline = Boolean((r && r.ok) || chatOk || effortOk)
-	const isFailed = Boolean((r && !r.ok) || (effortRes && !effortRes.ok && !chatOk && (!r || !r.ok)))
-	const hasAnthropic = chatMsgs.some((x) => x.protocol === 'anthropic') || resultProtocol(r) === 'anthropic'
-	const testedProtocol = (S.dest === 'claude' && hasAnthropic) ? 'anthropic' : (resultProtocol(r) || (effortOk ? 'responses' : hasAnthropic ? 'anthropic' : chatOk ? 'chat' : ''))
+	const isFailed = Boolean(r && !r.ok && !chatOk && !effortOk)
+	const hasAnthropic = chatMsgs.some((x) => x.protocol === 'anthropic') || resultProtocol(r) === 'anthropic' || (effortOk && effortRes.protocol === 'anthropic')
+	const testedProtocol = (S.dest === 'claude' && hasAnthropic) ? 'anthropic' : (resultProtocol(r) || (effortOk ? effortRes.protocol || '' : hasAnthropic ? 'anthropic' : chatOk ? 'chat' : ''))
 
 	let body
 	if (!canAct) {
@@ -1359,6 +1754,22 @@ function paneUse(p) {
 				Cambia a la pestaña <b>Codex CLI</b> para usar este modelo o elige un modelo con protocolo Anthropic.
 				<div class="row" style="margin-top:14px;justify-content:center">
 					<button class="b go" data-a="dest" data-d="codex">Ver en Codex CLI</button>
+				</div>
+			</div>`
+	} else if (S.dest === 'codex' && (testedProtocol === 'anthropic' || (hasAnthropic && !effortOk && !chatOk))) {
+		body = `
+			<div class="note bad" style="margin-bottom:14px">
+				<span class="i">!</span>
+				<div>
+					<strong>Incompatible con Codex CLI:</strong>
+					<div style="margin-top:3px"><code>${esc(m)}</code> está online pero respondió exclusivamente por <b>Anthropic (/v1/messages)</b>. Codex CLI no implementa protocolo Anthropic y Justwoker bloquea Chat Completions. Te recomendamos usar <b>Claude Code</b> con este modelo.</div>
+				</div>
+			</div>
+			<div class="blank" style="padding:22px 14px">
+				<b>Protocolo no soportado por Codex CLI</b>
+				Cambia a la pestaña <b>Claude Code</b> para usar este modelo de forma nativa y directa sin depender de servidor Node.
+				<div class="row" style="margin-top:14px;justify-content:center">
+					<button class="b go" data-a="dest" data-d="claude">Ver en Claude Code</button>
 				</div>
 			</div>`
 	} else if (!g) {
@@ -1608,21 +2019,28 @@ function render() {
 	}
 	if (!p) { S.sel = S.list[0].id; return render() }
 	const m = curModel(p)
-	const rightTitle = S.right === 'chat' ? 'Chat de prueba' : S.right === 'use' ? 'Cómo usarlo' : 'Archivos de configuración'
+	const rightTitle = S.right === 'chat'
+		? 'Chat de prueba'
+		: S.right === 'diagnostics'
+			? 'Diagnóstico del relay'
+			: S.right === 'use'
+				? 'Cómo usarlo'
+				: 'Archivos de configuración'
 
 	$('#grid').innerHTML = `
-		<div class="col">${paneStatus(p)}${paneModels(p)}</div>
+		<div class="col">${paneStatus(p)}${paneTerminalCompat(p)}${paneModels(p)}</div>
 		<div class="col">
 			<section class="pane grow">
 				<h2>${rightTitle}<span class="sp"></span><span class="tag ok" style="margin-right:6px">Proveedor: ${esc(p.label)}</span>${m ? tag('info', 'Elegido: ' + m) : tag('idle', 'Sin modelo')}</h2>
 				<div class="mbar">
 					<div class="chips">
 						<button data-a="right" data-d="chat" aria-pressed="${S.right === 'chat'}">Chat de prueba</button>
+						<button data-a="right" data-d="diagnostics" aria-pressed="${S.right === 'diagnostics'}">Diagnóstico del relay</button>
 						<button data-a="right" data-d="use" aria-pressed="${S.right === 'use'}">Cómo usarlo</button>
 						<button data-a="right" data-d="files" aria-pressed="${S.right === 'files'}">Editar archivos</button>
 					</div>
 				</div>
-				${S.right === 'chat' ? paneChat(p) : S.right === 'use' ? paneUse(p) : paneFiles()}
+				${S.right === 'chat' ? paneChat(p) : S.right === 'diagnostics' ? paneRelayDiagnostics(p) : S.right === 'use' ? paneUse(p) : paneFiles()}
 			</section>
 		</div>`
 }
@@ -1643,7 +2061,7 @@ async function refresh() {
 	S.claude = d.claude || null
 	if (!cur() && S.list.length) S.sel = S.list[0].id
 	const p = cur()
-	if (p?.model && !S.guides[p.id]?.[S.dest]) {
+	if (curModel(p) && !S.guides[p.id]?.[S.dest]) {
 		loadGuide(p.id)
 	}
 	render()
@@ -1651,25 +2069,62 @@ async function refresh() {
 
 /* ═════════════════════════════════════════════ acciones */
 
-async function runTest(id) {
+async function runTest(id, targetModel) {
 	const p = S.list.find((x) => x.id === id)
 	if (!p) return
+	S.testing = S.testing || {}
+	S.testing[id] = true
+	render()
 	const btns = document.querySelectorAll(`[data-a="test"][data-p="${id}"]`)
 	btns.forEach((b) => { b.disabled = true; b.innerHTML = '<span class="blink">●</span> Probando API...' })
 	try {
-		const r = await api('/api/test', { id })
+		const payload = { id }
+		const activeM = targetModel || curModel(p)
+		if (activeM) payload.model = activeM
+		const r = await api('/api/test', payload)
 		S.reports[id] = r
-		S.res[id] = S.res[id] || {}
 		for (const a of r.attempts || []) {
-			S.res[id][a.model] = { model:a.model, ok:a.ok, httpStatus:a.httpStatus, detail:a.detail, target:a.target,
-				reason: a.ok ? null : a.unavailable ? 'sin canal' : a.quota ? 'cuota agotada'
-					: a.ambiguous ? 'no acepta este modelo' : 'error' }
+			if (a.ok && a.model) {
+				S.res[id] = S.res[id] || {}
+				S.res[id][a.model] = {
+					model: a.model,
+					ok: true,
+					httpStatus: a.httpStatus,
+					detail: a.detail,
+					target: a.target,
+					protocol: a.protocol || (a.target === 'claude' ? 'anthropic' : a.target === 'chat' ? 'chat' : 'responses'),
+					ms: a.ms,
+				}
+			}
+		}
+		const adoptedModel = r.testedModel || (r.attempts?.find((a) => a.ok)?.model)
+		if (adoptedModel && !curModel(p)) {
+			S.selectedModel = S.selectedModel || {}
+			S.selectedModel[id] = adoptedModel
+			delete S.guides[id]
+			loadGuide(id)
 		}
 		await refresh()
 		if (r.verdict === 'codex_ready') toast(`${p.label}: Conexión directa a Responses verificada con "${r.testedModel}".`)
-		else if (r.verdict === 'chat_only' || r.verdict === 'no_responses') toast(`${p.label}: Verificado por Chat Completions (requiere traductor local).`)
+		else if (r.verdict === 'chat_only' || r.verdict === 'no_responses') toast(`${p.label}: Verificado por Chat Completions con "${r.testedModel}".`)
+		else if (r.verdict === 'claude_only') toast(`${p.label}: Anthropic directo verificado con "${r.testedModel}".`)
 		else { S.fold.diag = true; render(); toast(`${p.label}: ${VERD[r.verdict]?.big || r.verdict}`, true) }
-	} catch (e) { toast(e.message, true); render() }
+	} catch (e) {
+		toast(e.message, true)
+	} finally {
+		if (S.testing) delete S.testing[id]
+		render()
+	}
+}
+
+async function autoTestProvider(id) {
+	if (!id || S.testing?.[id]) return
+	if (!S.cats[id]) {
+		await loadCat(id, true)
+	}
+	const p = S.list.find((x) => x.id === id)
+	const m = p ? curModel(p) : ''
+	await runTest(id, m)
 }
 
 async function loadCat(id, quiet) {
@@ -1844,6 +2299,7 @@ document.addEventListener('click', async (e) => {
 		if (!S.cats[id]) loadCat(id, true)
 		else render()
 		if (cur()?.model && !S.guides[id]?.[S.dest]) loadGuide(id)
+		autoTestProvider(id)
 		return
 	}
 	if (a === 'add') {
@@ -2107,6 +2563,98 @@ document.addEventListener('click', async (e) => {
 			toast(`✕ Error al probar: ${err.message}`, true)
 		} finally {
 			S.effortTesting[key] = false
+			render()
+		}
+		return
+	}
+	if (a === 'run-relay-diagnostics') {
+		const p = cur()
+		if (!p) return
+		const targetModel = m || curModel(p)
+		if (!targetModel) return toast('Selecciona un modelo primero', true)
+		const key = p.id + ':' + targetModel
+		const initialUseBridge = relayDiagnosticUsesBridge(p, targetModel)
+		const runId = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+		S.relayDiagnosticsRunning = S.relayDiagnosticsRunning || {}
+		S.relayDiagnosticsProgress = S.relayDiagnosticsProgress || {}
+		S.relayDiagnosticsRunning[key] = true
+		S.relayDiagnosticsProgress[key] = {
+			status: 'running', stage: 'preparing', detail: 'Iniciando el diagnóstico.',
+			useBridge: initialUseBridge,
+			startedAt: Date.now(), updatedAt: Date.now(),
+			stages: { preparing: { status: 'running', detail: 'Iniciando el diagnóstico.', startedAt: Date.now() } },
+		}
+		render()
+		let polling = false
+		let progressQueue = Promise.resolve()
+		let progressError = null
+		const queuedEvents = new Set()
+		const showProgressEvent = async (snapshot, event) => {
+			if (!S.relayDiagnosticsRunning?.[key]) return
+			const current = S.relayDiagnosticsProgress[key] || { stages: {} }
+			const previous = current.stages?.[event.stage] || {}
+			const stageState = {
+				...previous,
+				status: event.state,
+				detail: event.detail,
+				startedAt: event.state === 'running' ? event.updatedAt : previous.startedAt || event.updatedAt,
+				...(['done', 'failed', 'skipped'].includes(event.state) ? { finishedAt: event.updatedAt } : {}),
+			}
+			S.relayDiagnosticsProgress[key] = {
+				...current,
+				...(typeof event.useBridge === 'boolean' ? { useBridge: event.useBridge } : {}),
+				status: 'running',
+				stage: event.stage,
+				stageStatus: event.state,
+				detail: event.detail,
+				startedAt: snapshot.startedAt || current.startedAt,
+				updatedAt: event.updatedAt,
+				stages: { ...(current.stages || {}), [event.stage]: stageState },
+			}
+			updateRelayProgressDisplay(key, initialUseBridge)
+			// Las transiciones son eventos reales del backend. Esta pausa solo evita que
+			// las que duran pocos milisegundos desaparezcan antes de poder verse.
+			await new Promise((resolve) => setTimeout(resolve, event.state === 'running' ? 420 : 140))
+		}
+		const queueProgressSnapshot = (snapshot) => {
+			const events = Array.isArray(snapshot?.events) ? [...snapshot.events].sort((a, b) => a.seq - b.seq) : []
+			for (const event of events) {
+				if (!event?.seq || queuedEvents.has(event.seq)) continue
+				queuedEvents.add(event.seq)
+				progressQueue = progressQueue.then(() => showProgressEvent(snapshot, event)).catch((error) => { progressError = error })
+			}
+			return progressQueue
+		}
+		const pollProgress = async () => {
+			if (polling || !S.relayDiagnosticsRunning?.[key]) return
+			polling = true
+			try {
+				const snapshot = await api(`/api/relay-diagnostics-progress?runId=${encodeURIComponent(runId)}`)
+				queueProgressSnapshot(snapshot)
+			} catch {}
+			finally { polling = false }
+		}
+		const request = api('/api/relay-diagnostics', { id: p.id, model: targetModel, runId })
+		const progressTimer = setInterval(pollProgress, 200)
+		setTimeout(pollProgress, 0)
+		try {
+			const res = await request
+			clearInterval(progressTimer)
+			await queueProgressSnapshot({ startedAt: res.execution?.startedAt, events: res.execution?.events || [] })
+			await progressQueue
+			S.relayDiagnostics = S.relayDiagnostics || {}
+			S.relayDiagnostics[key] = res
+			toast(`Diagnóstico del relay completado para ${targetModel}`)
+			if (progressError) toast('El resultado se guardó, pero no se pudieron mostrar todas las transiciones del progreso.', true)
+		} catch (err) {
+			clearInterval(progressTimer)
+			await pollProgress()
+			await progressQueue
+			toast(`Error en diagnóstico del relay: ${err.message}`, true)
+		} finally {
+			clearInterval(progressTimer)
+			S.relayDiagnosticsRunning[key] = false
+			delete S.relayDiagnosticsProgress[key]
 			render()
 		}
 		return
@@ -2564,7 +3112,7 @@ document.addEventListener('keydown', (e) => {
 refresh()
 	.then(async () => {
 		const p = cur()
-		if (p && !S.cats[p.id]) loadCat(p.id, true)
+		if (p) autoTestProvider(p.id)
 		// Se lee el config real de entrada, para poder avisar si esta roto.
 		try {
 			S.cfg = await api('/api/config')
