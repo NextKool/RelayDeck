@@ -1,6 +1,6 @@
-﻿# Proveedores de IA Compatibles y Créditos de Prueba
+# Proveedores de IA Compatibles y Créditos de Prueba
 
-Esta es una lista de proveedores, relays y gateways compatibles verificados con **RelayDeck v1.0** para su uso en **Codex CLI** y **Claude Code**.
+Esta es una lista de proveedores, relays y gateways compatibles verificados con **RelayDeck v1.1** para su uso en **Codex CLI** y **Claude Code**.
 
 Al registrarte desde estos enlaces puedes recibir saldo y créditos de bienvenida para realizar tus pruebas:
 

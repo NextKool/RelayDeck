@@ -1,4 +1,4 @@
-# RelayDeck v1.0
+# RelayDeck v1.1
 
 > **Consola local de mandos para probar, diagnosticar y conmutar APIs de IA en Codex CLI y Claude Code.**  
 > *Desarrollado por NextKool — 2026.*
@@ -284,7 +284,8 @@ Registralo con cualquier key que empiece por `sk-`.
 | `toml-edit.js` | Editor estructural de TOML: lee y edita en su sitio, sin duplicar tablas |
 | `public/index.html` | La interfaz gráfica de usuario en tiempo real (cero dependencias) |
 | `qa/fake-provider.js` | Relay falso para pruebas de integración |
-| `qa/run-tests.js` | Suite completa de pruebas automatizadas (44/44 tests) |
+| `qa/run-tests.js` | Suite de pruebas de integración end-to-end (52 tests) |
+| `qa/regressions-offline.js` | Suite rápida de regresión unitaria offline (22 tests) |
 | `PROVEEDORES.md` | Lista de proveedores compatibles verificados y créditos de prueba |
 | `LICENSE` | Licencia de código abierto GNU GPLv3 (NextKool 2026) |
 
