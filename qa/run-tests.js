@@ -99,6 +99,8 @@ function startPanelProcess({ panelPort, panelHome, codexHome }) {
 				CODEX_HOME: codexHome,
 				CODEX_PANEL_TIMEOUT_MS: '5000',
 				CODEX_PANEL_SLOW_MS: '1000',
+				CODEX_PANEL_NO_OPEN: '1',
+				RELAYDECK_NO_OPEN: '1',
 			},
 			stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
 		})

@@ -38,8 +38,8 @@ const ENV_FILE = path.join(PANEL_HOME, 'env.sh')
 const ENV_FILE_CMD = path.join(PANEL_HOME, 'env.cmd')
 const IS_WIN = os.platform() === 'win32'
 const PUBLIC_DIR = path.join(__dirname, 'public')
-// Limite maximo de espera por sonda: 15 segundos para no colgar la UI.
-const TIMEOUT_MS = Number(process.env.RELAYDECK_TIMEOUT_MS || process.env.CODEX_PANEL_TIMEOUT_MS || 15000)
+// Limite maximo de espera por sonda: 30 segundos para permitir relays lentos o modelos pesados.
+const TIMEOUT_MS = Number(process.env.RELAYDECK_TIMEOUT_MS || process.env.CODEX_PANEL_TIMEOUT_MS || 30000)
 // Reintentos ante 429 / 5xx, respetando Retry-After.
 const MAX_RETRIES = Number(process.env.RELAYDECK_RETRIES || process.env.CODEX_PANEL_RETRIES || 2)
 // A partir de aqui avisamos de que el proveedor va lento.
@@ -62,6 +62,7 @@ function ensureHome() {
 
 const memoryModelResults = new Map()
 const memorySupports = new Map()
+const memoryLastTest = new Map()
 
 function readStore() {
 	let list = []
@@ -78,6 +79,7 @@ function readStore() {
 		...p,
 		modelResults: memoryModelResults.get(p.id) || p.modelResults || {},
 		supports: memorySupports.get(p.id) || p.supports || null,
+		lastTest: memoryLastTest.get(p.id) || p.lastTest || null,
 	}))
 }
 
@@ -123,6 +125,9 @@ function writeStore(providers) {
 		}
 		if (p.supports) {
 			memorySupports.set(p.id, p.supports)
+		}
+		if (p.lastTest) {
+			memoryLastTest.set(p.id, p.lastTest)
 		}
 	}
 	const clean = providers.map((p) => {
@@ -377,7 +382,7 @@ function buildHeaders(profile, apiKey, { accept = 'application/json', extra = {}
 		...profile.headers(ctx),
 		...extra,
 	}
-	if (profile.mirrorAuth) {
+	if (profile.mirrorAuth || profile.id === 'claude-cli') {
 		headers['api-key'] = apiKey
 		headers['x-api-key'] = apiKey
 	}
@@ -394,7 +399,18 @@ function isClientBlock(result) {
 	)
 }
 
-function isAuthStatus(status) {
+function isHtmlBlock(result) {
+	const rawText = String(result?.text || '').trim()
+	return /^(?:<!doctype\s+html|<html\b)/i.test(rawText)
+}
+
+function isAuthStatus(statusOrResult, optionalResult) {
+	const res = (typeof statusOrResult === 'object' && statusOrResult) ? statusOrResult : optionalResult
+	if (res) {
+		if (isHtmlBlock(res)) return false
+		if (isEndpointMissing(res)) return false
+	}
+	const status = typeof statusOrResult === 'number' ? statusOrResult : statusOrResult?.httpStatus
 	return status === 401 || status === 403
 }
 
@@ -429,11 +445,13 @@ function isModelUnavailable(result) {
  * pero con otro modelo.
  */
 function isEndpointMissing(result) {
+	if (!result) return false
+	if (isHtmlBlock(result)) return false
 	const msg = String(
 		result.json?.error?.message || result.json?.message || result.text || '',
 	).toLowerCase()
 	if (result.httpStatus === 501) return true
-	return /unknown request url|no such endpoint|not found: post|invalid url|cannot post|endpoint not found/.test(
+	return /unknown request url|no such endpoint|not found: post|invalid url|cannot post|endpoint not found|not implemented/.test(
 		msg,
 	)
 }
@@ -637,8 +655,16 @@ async function probe(url, options = {}) {
 		try {
 			json = JSON.parse(text)
 		} catch {}
+		const rawText = String(text || '').trim()
+		const isHtml = /^(?:<!doctype\s+html|<html\b)/i.test(rawText)
+		if (!json && /(?:^|\n)data:\s*\{/.test(rawText)) {
+			const first = /(?:^|\n)data:\s*(.+)/.exec(rawText)
+			try {
+				json = JSON.parse(first[1].trim())
+			} catch {}
+		}
 		const hasError = Boolean(
-			json && (json.error || json.err_code || json.code === 1113 || json.type === 'upstream_error' || json.type === 'error')
+			isHtml || !json || (json && (json.error || json.err_code || json.code === 1113 || json.type === 'upstream_error' || json.type === 'error'))
 		)
 		const isOk = res.ok && !hasError
 		return {
@@ -671,6 +697,7 @@ function isRetryable(result) {
 	if (result.networkError === 'timeout') return false
 	// Un 503 "no hay canal para este modelo" es una decision de enrutado, no una sobrecarga.
 	if (result.httpStatus === 503 && isModelUnavailable(result)) return false
+	if (isEndpointMissing(result)) return false
 	if (result.httpStatus >= 500 && result.httpStatus !== 501) return true
 	// Error de red inmediato (DNS/ECONNREFUSED): no reintentar.
 	return false
@@ -834,14 +861,14 @@ async function probeSse(url, options = {}) {
  * `profile` (el que funciono) y `clientBlocked` (true si todos fueron
  * rechazados por huella).
  */
-async function probeSmart(url, { apiKey, method = 'GET', json, extraHeaders, sse = false, completeSse = false, timeout } = {}) {
+async function probeSmart(url, { apiKey, method = 'GET', json, extraHeaders, sse = false, completeSse = false, timeout, profiles = CLIENT_PROFILES } = {}) {
 	const body = json === undefined ? undefined : JSON.stringify(json)
 	const contentType = body ? { 'Content-Type': 'application/json' } : {}
 	const accept = sse ? 'text/event-stream' : 'application/json'
 	const run = sse ? probeSse : probe
 	let last = null
 
-	for (const profile of CLIENT_PROFILES) {
+	for (const profile of profiles) {
 		const result = await withRetries(() =>
 				run(url, {
 					method,
@@ -860,7 +887,7 @@ async function probeSmart(url, { apiKey, method = 'GET', json, extraHeaders, sse
 		// Red caida: cambiar cabeceras no ayuda.
 		if (result.httpStatus === 0) return result
 		// Un 401/403 por huella de cliente si merece reintento; el resto, no.
-		if (!(isAuthStatus(result.httpStatus) && isClientBlock(result))) return result
+		if (!(isAuthStatus(result.httpStatus, result) && isClientBlock(result))) return result
 	}
 
 	if (last) last.clientBlocked = true
@@ -880,7 +907,7 @@ function responseText(json) {
 }
 
 function apiError(result) {
-	if (result.networkError === 'timeout') return 'Tiempo de espera agotado (15s): el servidor no respondió.'
+	if (result.networkError === 'timeout') return 'Tiempo de espera agotado: el servidor tardó más de 30s en responder.'
 	if (result.httpStatus === 0 && result.networkError) return `Error de red: ${result.networkError}`
 	const rawText = String(result.text || '').trim()
 	if (/^(?:<!doctype\s+html|<html\b)/i.test(rawText)) {
@@ -917,33 +944,42 @@ async function listModels(baseUrl, apiKey) {
  * no sea auth, reintentamos en JSON plano para distinguir "no strea" de
  * "no sirve".
  */
-async function probeAnthropic(baseUrl, apiKey, model) {
+async function probeAnthropic(baseUrl, apiKey, model, timeout = TIMEOUT_MS) {
 	const url = endpoint(baseUrl, '/messages')
 	const extraHeaders = {
 		'anthropic-version': '2023-06-01',
 		'x-api-key': apiKey,
 		'User-Agent': 'claude-cli/1.0.0',
 	}
+	const claudeProfile = CLIENT_PROFILES.find((p) => p.id === 'claude-cli') || CLIENT_PROFILES[0]
+	const profiles = [claudeProfile]
 	const streamed = await probeSmart(url, {
 		apiKey,
 		method: 'POST',
+		timeout,
 		sse: true,
 		extraHeaders,
+		profiles,
 		json: { model, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'ping' }] },
 	})
 	streamed.mode = 'stream'
-	if (streamed.ok || streamed.httpStatus === 0 || isAuthStatus(streamed.httpStatus)) {
+	if (streamed.ok || isAuthStatus(streamed.httpStatus, streamed)) {
 		return { best: streamed, streamed, plain: null, target: 'claude' }
 	}
 
 	const plain = await probeSmart(url, {
 		apiKey,
 		method: 'POST',
+		timeout,
 		extraHeaders,
+		profiles,
 		json: { model, max_tokens: 16, stream: false, messages: [{ role: 'user', content: 'ping' }] },
 	})
 	plain.mode = 'json'
-	return { best: plain.ok ? plain : streamed, streamed, plain, target: 'claude' }
+	// Si el intento streaming fue interceptado por un WAF pero el intento JSON
+	// devolvio un error estructurado del proveedor, conservar el error real.
+	const best = plain.ok || (!streamed.json && plain.json) ? plain : streamed
+	return { best, streamed, plain, target: 'claude' }
 }
 
 async function probeResponses(baseUrl, apiKey, model) {
@@ -955,7 +991,7 @@ async function probeResponses(baseUrl, apiKey, model) {
 		json: { model, input: 'ping', max_output_tokens: 16, stream: true },
 	})
 	streamed.mode = 'stream'
-	if (streamed.ok || streamed.httpStatus === 0 || isAuthStatus(streamed.httpStatus)) {
+	if (streamed.ok || streamed.httpStatus === 0 || isAuthStatus(streamed) || isEndpointMissing(streamed)) {
 		return { best: streamed, streamed, plain: null, target: 'responses' }
 	}
 
@@ -1096,13 +1132,13 @@ async function probeBilling(baseUrl, apiKey) {
 /** Motivo legible de un fallo de /v1/responses. */
 function classifyReason(r) {
 	if (r.ok) return null
-	if (isAuthStatus(r.httpStatus)) return 'auth'
+	if (isEndpointMissing(r)) return 'sin endpoint'
+	if (isAuthStatus(r.httpStatus, r)) return 'auth'
 	if (r.networkError === 'timeout') return 'timeout'
 	if (r.httpStatus === 0) return 'sin conexion'
 	if (isModelUnavailable(r)) return 'sin canal'
 	if (isQuotaError(r)) return 'cuota agotada'
 	if (r.httpStatus === 429) return 'limite de ritmo'
-	if (isEndpointMissing(r)) return 'sin endpoint'
 	if (isAmbiguous(r)) return 'rechazado (404 sin detalle)'
 	return 'error'
 }
@@ -1125,24 +1161,54 @@ async function sweepModels(
 				if (shouldStop?.() || (stopOnFirst && found)) return
 				const target = queue.shift()
 				if (!target) return
-				const round = await probeResponses(baseUrl, apiKey, target)
-				let r = round.best
+				let round = null
+				let r = null
 				let targetProto = 'responses'
-				if (checkAllProtocols && !r.ok && !isAuthStatus(r.httpStatus) && r.httpStatus !== 0) {
-					const isClaude = /claude/i.test(target)
-					const [chatRes, anthRound] = await Promise.all([
-						probeChat(baseUrl, apiKey, target),
-						probeAnthropic(baseUrl, apiKey, target),
-					])
-					if (isClaude && anthRound.best.ok) {
+				const isClaude = /claude/i.test(target)
+
+				if (checkAllProtocols && isClaude) {
+					const anthRound = await probeAnthropic(baseUrl, apiKey, target)
+					if (anthRound.best?.ok) {
 						r = anthRound.best
 						targetProto = 'claude'
-					} else if (chatRes.ok) {
-						r = chatRes
-						targetProto = 'chat'
-					} else if (anthRound.best.ok) {
+					} else if (anthRound.best && !isEndpointMissing(anthRound.best)) {
 						r = anthRound.best
 						targetProto = 'claude'
+					} else {
+						round = await probeResponses(baseUrl, apiKey, target)
+						if (round.best?.ok) {
+							r = round.best
+							targetProto = 'responses'
+						} else {
+							const chatRes = await probeChat(baseUrl, apiKey, target)
+							if (chatRes?.ok) {
+								r = chatRes
+								targetProto = 'chat'
+							} else {
+								const authFailure = [anthRound.best, chatRes].find((x) => isAuthStatus(x))
+								r = authFailure || anthRound.best || round.best
+							}
+						}
+					}
+				} else {
+					round = await probeResponses(baseUrl, apiKey, target)
+					r = round.best
+					targetProto = 'responses'
+					if (checkAllProtocols && !r.ok && !isAuthStatus(r.httpStatus, r) && r.httpStatus !== 0) {
+						const [chatRes, anthRound] = await Promise.all([
+							probeChat(baseUrl, apiKey, target),
+							probeAnthropic(baseUrl, apiKey, target),
+						])
+						if (chatRes.ok) {
+							r = chatRes
+							targetProto = 'chat'
+						} else if (anthRound.best.ok) {
+							r = anthRound.best
+							targetProto = 'claude'
+						} else {
+							const authFailure = [anthRound.best, chatRes].find((x) => isAuthStatus(x?.httpStatus, x))
+							if (authFailure) r = authFailure
+						}
 					}
 				}
 				const entry = {
@@ -1177,7 +1243,7 @@ async function sweepModels(
  * sondas: /models puede estar bloqueado aunque /responses funcione.
  */
 function clientCheck(probes) {
-	const accepted = probes.find((r) => r && !isAuthStatus(r.httpStatus) && r.httpStatus > 0)
+	const accepted = probes.find((r) => r && !isAuthStatus(r) && r.httpStatus > 0)
 	if (accepted) {
 		return {
 			status: 'pass',
@@ -1214,7 +1280,7 @@ async function runTest({ baseUrl, apiKey, model }) {
 	}
 	// Un 401 en /models NO cierra el caso: muchos relays lo bloquean y sirven
 	// /responses igual. Solo anotamos y seguimos probando.
-	const modelsAuthFail = isAuthStatus(modelsResult.httpStatus)
+	const modelsAuthFail = isAuthStatus(modelsResult)
 	if (modelsAuthFail) {
 		checks.models = {
 			status: 'warn',
@@ -1287,6 +1353,33 @@ async function runTest({ baseUrl, apiKey, model }) {
 	let streamed = null
 	let plain = null
 	let target = candidates[0]
+	let anthropic = null
+
+	const isClaudeCandidate = (m) => /claude/i.test(m)
+	const onlyClaude = candidates.every(isClaudeCandidate)
+
+	if (onlyClaude) {
+		const anthRound = await probeAnthropic(baseUrl, apiKey, target)
+		anthropic = anthRound.best
+		if (anthropic.ok || !isEndpointMissing(anthropic)) {
+			checks.anthropic = anthropic.ok
+				? { status: 'pass', detail: 'Anthropic Messages funciona; compatible con Claude Code.', ms: anthropic.ms }
+				: { status: 'fail', detail: apiError(anthropic), ms: anthropic.ms }
+			checks.responses = { status: 'warn', detail: 'Este modelo usa Anthropic Messages; compatible con Claude Code.' }
+			attempts.push({
+				model: target,
+				target: 'claude',
+				ok: anthropic.ok,
+				httpStatus: anthropic.httpStatus,
+				detail: anthropic.ok ? 'OK (/v1/messages)' : apiError(anthropic),
+				unavailable: isModelUnavailable(anthropic),
+				quota: isQuotaError(anthropic),
+				ambiguous: false,
+				endpointMissing: false,
+			})
+			responses = { ok: false, httpStatus: 0, skipped: true }
+		}
+	}
 
 	const record = (candidate, round) => {
 		const r = round.best
@@ -1309,16 +1402,18 @@ async function runTest({ baseUrl, apiKey, model }) {
 		return entry
 	}
 
-	for (const candidate of candidates) {
-		const entry = record(candidate, await probeResponses(baseUrl, apiKey, candidate))
-		if (entry.ok) break
-		// Cambiar de modelo no arregla auth ni la red.
-		if (isAuthStatus(entry.httpStatus) || entry.httpStatus === 0) break
-		// El relay dice claramente que el endpoint no existe: otro modelo no ayuda.
-		if (entry.endpointMissing) break
-		// Lo demas (sin canal, cuota, o un 404 ambiguo) es cosa del modelo:
-		// seguimos con el siguiente candidato.
-		if (!entry.unavailable && !entry.quota && !entry.ambiguous) break
+	if (!responses) {
+		for (const candidate of candidates) {
+			const entry = record(candidate, await probeResponses(baseUrl, apiKey, candidate))
+			if (entry.ok) break
+			// Cambiar de modelo no arregla auth ni la red.
+			if (isAuthStatus(entry.httpStatus) || entry.httpStatus === 0) break
+			// El relay dice claramente que el endpoint no existe: otro modelo no ayuda.
+			if (entry.endpointMissing) break
+			// Lo demas (sin canal, cuota, o un 404 ambiguo) es cosa del modelo:
+			// seguimos con el siguiente candidato.
+			if (!entry.unavailable && !entry.quota && !entry.ambiguous) break
+		}
 	}
 
 	// Si el bucle corto no concluyo y quedan modelos sin probar, barremos el
@@ -1381,7 +1476,12 @@ async function runTest({ baseUrl, apiKey, model }) {
 			? ' Sin catalogo /v1/models: los candidatos salen de los metadatos del relay o de tu config de Codex.'
 			: '')
 
-	if (responses.ok) {
+	if (responses.skipped && anthropic) {
+		checks.responses = {
+			status: 'warn',
+			detail: 'No se probo Responses: este modelo se valido directamente mediante Anthropic Messages.',
+		}
+	} else if (responses.ok) {
 		checks.responses = {
 			status: 'pass',
 			detail:
@@ -1421,12 +1521,18 @@ async function runTest({ baseUrl, apiKey, model }) {
 	}
 
 	// Codex strea siempre: un proveedor que solo sirve JSON va a fallar en uso real.
-	if (streamed.ok) {
+	if (streamed?.ok) {
 		checks.streaming = { status: 'pass', detail: 'Emite SSE como espera Codex.', ms: streamed.ms }
 	} else if (plain?.ok) {
 		checks.streaming = {
 			status: 'warn',
-			detail: `Responde en JSON pero no strea (HTTP ${streamed.httpStatus} con stream:true). Codex strea siempre: esperate cortes.`,
+			detail: `Responde en JSON pero no strea (HTTP ${streamed?.httpStatus} con stream:true). Codex strea siempre: esperate cortes.`,
+		}
+	} else if (anthropic?.ok) {
+		checks.streaming = {
+			status: 'pass',
+			detail: 'Emite SSE (Anthropic Messages).',
+			ms: anthropic.ms,
 		}
 	} else if (allModelIssues) {
 		// El relay corto antes de llegar al streaming: no sabemos si strea.
@@ -1434,13 +1540,13 @@ async function runTest({ baseUrl, apiKey, model }) {
 			status: 'warn',
 			detail: 'Sin comprobar: el relay rechazo el modelo antes de empezar a streamear.',
 		}
-	} else if (!isAuthStatus(streamed.httpStatus) && streamed.httpStatus > 0 && !streamed.sse) {
+	} else if (streamed && !isAuthStatus(streamed) && streamed.httpStatus > 0 && !streamed.sse) {
 		checks.streaming = { status: 'fail', detail: 'No emite text/event-stream.' }
 	}
 
 	// Aviso de lentitud: no es un fallo, pero explica los timeouts en Codex.
-	const slowest = Math.max(modelsResult.ms || 0, responses.ms || 0)
-	const retried = (modelsResult.retries || 0) + (responses.retries || 0)
+	const slowest = Math.max(modelsResult.ms || 0, responses.ms || 0, anthropic?.ms || 0)
+	const retried = (modelsResult.retries || 0) + (responses.retries || 0) + (anthropic?.retries || 0)
 	if (slowest >= SLOW_MS || retried > 0) {
 		const parts = []
 		if (slowest >= SLOW_MS) parts.push(`la peticion mas lenta tardo ${(slowest / 1000).toFixed(1)}s`)
@@ -1457,15 +1563,28 @@ async function runTest({ baseUrl, apiKey, model }) {
 	// 3. Protocolos alternativos. Un exito aqui NO convierte al relay en
 	// compatible con Responses: Chat necesita puente y Messages solo sirve en Claude.
 	let chat = null
-	let anthropic = null
 	let alternateModel = target
-	if (!responses.ok) {
+	if (!responses.ok && !anthropic) {
 		const healthy = attempts.find((a) => !a.unavailable && !a.quota)
 		alternateModel = healthy?.model || target
-		const [chatResult, anthropicRound] = await Promise.all([
-			probeChat(baseUrl, apiKey, alternateModel),
-			probeAnthropic(baseUrl, apiKey, alternateModel),
-		])
+		const isClaude = /claude/i.test(alternateModel)
+		let chatResult
+		let anthropicRound
+		if (isClaude) {
+			anthropicRound = await probeAnthropic(baseUrl, apiKey, alternateModel)
+			if (anthropicRound.best && (anthropicRound.best.ok || !isEndpointMissing(anthropicRound.best))) {
+				chatResult = { ok: false, httpStatus: 0, skipped: true, target: 'chat' }
+			} else {
+				chatResult = await probeChat(baseUrl, apiKey, alternateModel)
+			}
+		} else {
+			const resPair = await Promise.all([
+				probeChat(baseUrl, apiKey, alternateModel),
+				probeAnthropic(baseUrl, apiKey, alternateModel),
+			])
+			chatResult = resPair[0]
+			anthropicRound = resPair[1]
+		}
 		chat = chatResult
 		anthropic = anthropicRound.best
 		if (chat.ok) {
@@ -1512,7 +1631,7 @@ async function runTest({ baseUrl, apiKey, model }) {
 	// endpoints que de verdad importan, y no es un bloqueo por huella.
 	const probes = [modelsResult, responses, chat, anthropic].filter(Boolean)
 	const anyAccepted = probes.some((r) => r.ok)
-	const authRejected = probes.filter((r) => isAuthStatus(r.httpStatus))
+	const authRejected = probes.filter((r) => isAuthStatus(r))
 	const allBlocked = authRejected.length > 0 && authRejected.every((r) => r.clientBlocked)
 	checks.client = clientCheck(probes)
 
@@ -1548,9 +1667,9 @@ async function runTest({ baseUrl, apiKey, model }) {
 			: 'no_channel'
 	}
 	else if (sweep && !sweep.found && attempts.length > MAX_MODEL_TRIES && allAmbiguous) verdict = 'no_responses'
+	else if (/claude/i.test(alternateModel) && anthropic?.ok) verdict = 'claude_only'
 	else if (chat?.ok) verdict = 'chat_only'
 	else if (anthropic?.ok) verdict = 'claude_only'
-	else if (allAmbiguous || attempts.some((a) => a.endpointMissing)) verdict = 'no_responses'
 	else if (allModelIssues) {
 		// La key sirve y el servidor responde: el problema es de modelo o cuota.
 		verdict = modelIssues.every((a) => a.quota && !a.unavailable && !a.ambiguous)
@@ -3113,17 +3232,20 @@ const routes = {
 		const CHAT_MAX_MS = 30000
 		const remaining = () => CHAT_MAX_MS - (Date.now() - started)
 		const effort = body.effort || stored?.effort || 'high'
-		const rawTarget = stored?.modelResults?.[model]?.target || ''
+		const rawTarget = body.protocol || body.target || stored?.modelResults?.[model]?.target || ''
 		const detectedProtocol = rawTarget === 'claude'
 			? 'anthropic'
 			: ['anthropic', 'chat', 'responses'].includes(rawTarget)
 				? rawTarget
 				: ''
-		const inferredProtocol = /claude/i.test(model) ? 'anthropic' : ''
-		const fallbackProtocols = detectedProtocol === 'anthropic' || inferredProtocol === 'anthropic'
-			? ['anthropic', 'chat', 'responses']
-			: ['chat', 'responses']
-		const protocolOrder = [...new Set([detectedProtocol, inferredProtocol, ...fallbackProtocols].filter(Boolean))]
+		const isClaudeModel = /claude/i.test(model)
+		const primaryProtocol = detectedProtocol || (isClaudeModel ? 'anthropic' : '')
+		const fallbackProtocols = primaryProtocol === 'anthropic'
+			? ['anthropic']
+			: primaryProtocol === 'responses'
+				? ['responses', 'chat']
+				: ['chat', 'responses']
+		const protocolOrder = [...new Set([primaryProtocol, ...fallbackProtocols].filter(Boolean))]
 		const failures = []
 
 		for (const protocol of protocolOrder) {
@@ -3131,10 +3253,12 @@ const routes = {
 			let result
 			let replyText = ''
 			if (protocol === 'anthropic') {
+				const claudeProfile = CLIENT_PROFILES.find((p) => p.id === 'claude-cli') || CLIENT_PROFILES[0]
 				result = await probeSmart(endpoint(baseUrl, '/messages'), {
 					apiKey,
 					method: 'POST',
 					timeout: remaining(),
+					profiles: [claudeProfile],
 					extraHeaders: {
 						'anthropic-version': '2023-06-01',
 						'x-api-key': apiKey,
@@ -3143,7 +3267,6 @@ const routes = {
 					json: {
 						model,
 						max_tokens: 1024,
-						...(effort ? { output_config: { effort } } : {}),
 						system: messages.filter((m) => m.role === 'system').map((m) => String(m.content)).join('\n') || undefined,
 						messages: messages
 							.filter((m) => m.role !== 'system')
@@ -3190,6 +3313,51 @@ const routes = {
 			}
 
 			if (replyText) {
+				if (stored) {
+					const verifiedTarget = protocol === 'anthropic' ? 'claude' : protocol
+					const newRes = {
+						model,
+						ok: true,
+						httpStatus: result.httpStatus || 200,
+						ms: Date.now() - started,
+						target: verifiedTarget,
+						streams: false,
+						reason: null,
+						detail: protocol === 'anthropic'
+							? 'Responde a /v1/messages (Claude Code)'
+							: protocol === 'chat'
+								? 'Responde a /v1/chat/completions (Chat)'
+								: 'Responde a /v1/responses (Codex)',
+					}
+					const nextModelResults = { ...(stored.modelResults || {}), [model]: newRes }
+					let updatedLastTest = stored.lastTest ? { ...stored.lastTest } : null
+					const newVerdict = verifiedTarget === 'responses' ? 'codex_ready' : verifiedTarget === 'chat' ? 'chat_only' : 'claude_only'
+					const checks = { ...(updatedLastTest?.checks || {}) }
+					checks.reachable = checks.reachable || { status: 'pass', detail: `HTTP ${result.httpStatus || 200}`, ms: Date.now() - started }
+					checks.auth = { status: 'pass', detail: 'Key aceptada' }
+					if (verifiedTarget === 'responses') {
+						checks.responses = { status: 'pass', detail: `Responses API OK con "${model}"`, ms: Date.now() - started }
+					} else if (verifiedTarget === 'chat') {
+						checks.chat = { status: 'warn', detail: 'Chat Completions funciona. Codex necesita el traductor local.', ms: Date.now() - started }
+					} else if (verifiedTarget === 'claude') {
+						checks.anthropic = { status: 'pass', detail: 'Anthropic Messages funciona; compatible con Claude Code.', ms: Date.now() - started }
+					}
+					updatedLastTest = {
+						...(updatedLastTest || {}),
+						at: new Date().toISOString(),
+						verdict: newVerdict,
+						checks,
+					}
+					const pIdx = providers.findIndex((p) => p.id === body.id)
+					if (pIdx >= 0) {
+						providers[pIdx] = {
+							...stored,
+							modelResults: nextModelResults,
+							lastTest: updatedLastTest,
+						}
+						writeStore(providers)
+					}
+				}
 				return {
 					ok: true,
 					model,
@@ -3201,13 +3369,20 @@ const routes = {
 				}
 			}
 			failures.push(result)
+			// Si el endpoint existe y dio un error de API explícito (cuota, modelo, upstream), no seguir probando rutas incompatibles
+			if (result && result.httpStatus > 0 && !isEndpointMissing(result)) {
+				break
+			}
 		}
 
 		if (Date.now() - started >= 29000) {
 			throw new Error('Tiempo de espera agotado (30s máx). El relay tardó demasiado en responder.')
 		}
 
-		const failed = failures.find((result) => result?.json?.error || result?.json?.message) || failures[0]
+		const failed = failures.find((result) => isAuthStatus(result)) ||
+			failures.find((result) => !isEndpointMissing(result) && (result?.json?.error || result?.json?.message)) ||
+			failures.find((result) => result?.json?.error || result?.json?.message) ||
+			failures[0]
 		throw new Error(apiError(failed) || `Error al consultar el modelo (HTTP ${failed?.httpStatus || 504})`)
 	},
 
@@ -3484,24 +3659,54 @@ const routes = {
 		if (!body.model) throw new Error('Falta el modelo')
 
 		newSession()
-		const round = await probeResponses(baseUrl, apiKey, body.model)
-		let r = round.best
+		const isClaude = /claude/i.test(body.model)
+		let round = null
+		let r = null
 		let target = 'responses'
-		if (!r.ok && !isAuthStatus(r.httpStatus) && r.httpStatus !== 0) {
-			const isClaude = /claude/i.test(body.model)
-			const [chatRes, anthRound] = await Promise.all([
-				probeChat(baseUrl, apiKey, body.model),
-				probeAnthropic(baseUrl, apiKey, body.model),
-			])
-			if (isClaude && anthRound.best.ok) {
+
+		if (isClaude) {
+			const anthRound = await probeAnthropic(baseUrl, apiKey, body.model)
+			if (anthRound.best?.ok) {
 				r = anthRound.best
 				target = 'claude'
-			} else if (chatRes.ok) {
-				r = chatRes
-				target = 'chat'
-			} else if (anthRound.best.ok) {
+			} else if (anthRound.best && !isEndpointMissing(anthRound.best)) {
 				r = anthRound.best
 				target = 'claude'
+			} else {
+				round = await probeResponses(baseUrl, apiKey, body.model)
+				if (round.best?.ok) {
+					r = round.best
+					target = 'responses'
+				} else {
+					const chatRes = await probeChat(baseUrl, apiKey, body.model)
+					if (chatRes?.ok) {
+						r = chatRes
+						target = 'chat'
+					} else {
+						const authFailure = [anthRound.best, chatRes].find((x) => isAuthStatus(x))
+						r = authFailure || anthRound.best || round.best
+					}
+				}
+			}
+		} else {
+			round = await probeResponses(baseUrl, apiKey, body.model)
+			r = round.best
+			target = 'responses'
+			if (!r.ok && !isAuthStatus(r.httpStatus, r) && r.httpStatus !== 0) {
+				const [chatRes, anthRound] = await Promise.all([
+					probeChat(baseUrl, apiKey, body.model),
+					probeAnthropic(baseUrl, apiKey, body.model),
+				])
+				if (chatRes.ok) {
+					r = chatRes
+					target = 'chat'
+				} else if (anthRound.best.ok) {
+					r = anthRound.best
+					target = 'claude'
+				} else {
+					const authFailure = [anthRound.best, chatRes].find((x) => isAuthStatus(x?.httpStatus, x))
+					if (authFailure) r = authFailure
+				}
 			}
 		}
 
@@ -3511,7 +3716,7 @@ const routes = {
 			httpStatus: r.httpStatus,
 			ms: r.ms,
 			target,
-			streams: target === 'responses' ? Boolean(round.streamed?.ok) : false,
+			streams: target === 'responses' ? Boolean(round?.streamed?.ok) : false,
 			reason: classifyReason(r),
 			detail: r.ok
 				? target === 'claude'
@@ -3522,9 +3727,31 @@ const routes = {
 				: apiError(r),
 		}
 		if (stored) {
+			const nextModelResults = { ...(stored.modelResults || {}), [body.model]: res }
+			let updatedLastTest = stored.lastTest ? { ...stored.lastTest } : null
+			if (res.ok) {
+				const newVerdict = target === 'responses' ? 'codex_ready' : target === 'chat' ? 'chat_only' : 'claude_only'
+				const checks = { ...(updatedLastTest?.checks || {}) }
+				checks.reachable = checks.reachable || { status: 'pass', detail: `HTTP ${r.httpStatus}`, ms: r.ms }
+				checks.auth = { status: 'pass', detail: 'Key aceptada' }
+				if (target === 'responses') {
+					checks.responses = { status: 'pass', detail: `Responses API OK con "${body.model}"`, ms: r.ms }
+				} else if (target === 'chat') {
+					checks.chat = { status: 'warn', detail: 'Chat Completions funciona. Codex necesita el traductor local.', ms: r.ms }
+				} else if (target === 'claude') {
+					checks.anthropic = { status: 'pass', detail: 'Anthropic Messages funciona; compatible con Claude Code.', ms: r.ms }
+				}
+				updatedLastTest = {
+					...(updatedLastTest || {}),
+					at: new Date().toISOString(),
+					verdict: newVerdict,
+					checks,
+				}
+			}
 			providers[index] = {
 				...stored,
-				modelResults: { ...(stored.modelResults || {}), [body.model]: res },
+				modelResults: nextModelResults,
+				...(updatedLastTest ? { lastTest: updatedLastTest } : {}),
 			}
 			writeStore(providers)
 		}
@@ -4148,9 +4375,28 @@ async function handleScanStream(req, res, query) {
 						detail: r.detail,
 					}
 				}
+				let updatedLastTest = currentProviders[pIdx].lastTest ? { ...currentProviders[pIdx].lastTest } : null
+				const firstWorking = results.find((r) => r.ok)
+				if (firstWorking && (updatedLastTest?.verdict === 'dead' || updatedLastTest?.verdict === 'unreachable' || !updatedLastTest?.verdict)) {
+					const proto = firstWorking.target || 'responses'
+					const newVerdict = proto === 'responses' ? 'codex_ready' : proto === 'chat' ? 'chat_only' : 'claude_only'
+					const checks = { ...(updatedLastTest?.checks || {}) }
+					checks.reachable = checks.reachable || { status: 'pass', detail: `HTTP ${firstWorking.httpStatus}`, ms: firstWorking.ms }
+					checks.auth = { status: 'pass', detail: 'Key aceptada' }
+					if (proto === 'responses') checks.responses = { status: 'pass', detail: `Responses API OK con "${firstWorking.model}"`, ms: firstWorking.ms }
+					else if (proto === 'chat') checks.chat = { status: 'warn', detail: 'Chat Completions funciona. Codex necesita el traductor local.', ms: firstWorking.ms }
+					else if (proto === 'claude') checks.anthropic = { status: 'pass', detail: 'Anthropic Messages funciona; compatible con Claude Code.', ms: firstWorking.ms }
+					updatedLastTest = {
+						...(updatedLastTest || {}),
+						at: new Date().toISOString(),
+						verdict: newVerdict,
+						checks,
+					}
+				}
 				currentProviders[pIdx] = {
 					...currentProviders[pIdx],
 					modelResults: existing,
+					...(updatedLastTest ? { lastTest: updatedLastTest } : {}),
 				}
 				writeStore(currentProviders)
 			}

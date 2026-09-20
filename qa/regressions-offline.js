@@ -52,7 +52,7 @@ function backend(providers = []) {
 		inspectConfig = () => ({});
 		usageGuide = () => ({});
 		launchCommand = () => '';
-		globalThis.api = {routes, runRelayDiagnostics, providerNeedsBridge, rejectedUnknownModel};
+		globalThis.api = {routes, runTest, runRelayDiagnostics, providerNeedsBridge, rejectedUnknownModel, isAuthStatus, isEndpointMissing};
 	`, context)
 	return { context, api: context.api, effects }
 }
@@ -323,4 +323,133 @@ test('el DOM de etapas incorpora o retira el puente al cambiar la ruta observada
 	context.S.relayDiagnosticsProgress.test.useBridge = false
 	context.updateRelayProgressDisplay('test', true)
 	assert.doesNotMatch(list.innerHTML, /data-fp-stage="bridge_first"/)
+})
+
+test('getVerdictView no muestra fuera de línea si el servidor responde o hay modelo funcional', () => {
+	const start = html.indexOf('function resultProtocol(')
+	const end = html.indexOf('/* ═════════════════════════════════════════════ panel: compatibilidad por terminal', start)
+	const context = vm.createContext({
+		S: { testing: {}, res: {} },
+		VERD: {
+			codex_ready: { cls: 'ok', big: 'RESPONSES (DIRECTO)' },
+			claude_only: { cls: 'info', big: 'ANTHROPIC DIRECTO' },
+			chat_only: { cls: 'warn', big: 'PUENTE LOCAL (CHAT)' },
+			dead: { cls: 'bad', big: 'INACCESIBLE' },
+			unreachable: { cls: 'bad', big: 'SIN CONEXIÓN' },
+			unknown: { cls: 'idle', big: 'SIN VERIFICAR' },
+		},
+		curModel: (p) => p?.model || '',
+	})
+	vm.runInContext(html.slice(start, end), context)
+
+	// Caso 1: Servidor alcanzable pero endpoints fallaron -> dead no es "FUERA DE LÍNEA" ni "SIN CONEXIÓN"
+	const p1 = { id: 'p1', model: 'claude-opus-4-8' }
+	const rDead = { verdict: 'dead', checks: { reachable: { status: 'pass' } } }
+	const v1 = context.getVerdictView(p1, rDead)
+	assert.equal(v1.big, 'SIN PROTOCOLO VÁLIDO')
+	assert.doesNotMatch(v1.why, /No se pudo conectar/)
+
+	// Caso 2: El modelo claude-opus-4-8 funciona por Anthropic -> el estado pasa a EN LÍNEA (ANTHROPIC)
+	context.S.res['p1'] = {
+		'claude-opus-4-8': { ok: true, target: 'claude', model: 'claude-opus-4-8', detail: 'Responde a /v1/messages' }
+	}
+	const v2 = context.getVerdictView(p1, rDead)
+	assert.equal(v2.cls, 'info')
+	assert.equal(v2.big, 'EN LÍNEA (ANTHROPIC)')
+})
+
+test('isAuthStatus excluye respuestas HTML con código 401 o 403', () => {
+	const { api } = backend()
+	assert.equal(api.isAuthStatus(401), true)
+	assert.equal(api.isAuthStatus(403), true)
+	assert.equal(api.isAuthStatus({ httpStatus: 403, text: '<!DOCTYPE html><html>WAF block</html>' }), false)
+	assert.equal(api.isAuthStatus({ httpStatus: 401, text: '<html>Unauthorized</html>' }), false)
+	assert.equal(api.isAuthStatus({ httpStatus: 401, json: { error: { message: 'invalid_api_key' } } }), true)
+})
+
+test('POST /api/chat exitoso persiste el resultado del modelo en el store', async () => {
+	const stored = provider('claude', { id: 'p1', model: 'claude-opus-4-8' })
+	const env = backend([stored])
+	env.context.probeSmart = async () => ({
+		ok: true,
+		httpStatus: 200,
+		ms: 10,
+		json: { content: [{ text: 'hola desde opus' }] },
+	})
+	const res = await env.api.routes['POST /api/chat']({ id: 'p1', model: 'claude-opus-4-8', prompt: 'ping' })
+	assert.equal(res.ok, true)
+	assert.equal(res.reply, 'hola desde opus')
+	assert.equal(env.effects.providers[0].modelResults['claude-opus-4-8'].ok, true)
+	assert.equal(env.effects.providers[0].modelResults['claude-opus-4-8'].target, 'claude')
+	assert.equal(env.effects.providers[0].lastTest.verdict, 'claude_only')
+})
+
+test('isEndpointMissing excluye respuestas HTML y distingue WAF de ausencia de ruta', () => {
+	const { api } = backend()
+	assert.equal(api.isEndpointMissing({ httpStatus: 403, text: '<!DOCTYPE html><html>Cloudflare WAF</html>' }), false)
+	assert.equal(api.isEndpointMissing({ httpStatus: 404, json: { error: { message: 'unknown request url' } } }), true)
+	assert.equal(api.isEndpointMissing({ httpStatus: 501, text: 'not implemented' }), true)
+})
+
+test('POST /api/test-model para Claude no cambia a OpenAI ante 503, cuota, HTML o red', async () => {
+	const failures = [
+		{ name: 'upstream', httpStatus: 503, json: { error: { message: 'upstream saturated' } } },
+		{ name: 'cuota', httpStatus: 429, json: { error: { message: 'quota has been exhausted' } } },
+		{ name: 'WAF', httpStatus: 403, text: '<!DOCTYPE html><html>Cloudflare denied</html>', json: null },
+		{ name: 'red', httpStatus: 0, networkError: 'ECONNREFUSED', json: null },
+	]
+	for (const failure of failures) {
+		const stored = provider('claude', { id: 'p1', model: 'claude-opus-4-8' })
+		const env = backend([stored])
+		const calledUrls = []
+		env.context.probeSmart = async (url) => {
+			calledUrls.push(url)
+			return { ok: false, ms: 20, ...failure }
+		}
+		const res = await env.api.routes['POST /api/test-model']({ id: 'p1', model: 'claude-opus-4-8' })
+		assert.equal(res.ok, false, failure.name)
+		assert.equal(res.target, 'claude', failure.name)
+		assert.equal(res.httpStatus, failure.httpStatus, failure.name)
+		assert.equal(calledUrls.length, 2, failure.name)
+		assert.ok(calledUrls.every((u) => u.includes('/messages')), failure.name)
+	}
+})
+
+test('POST /api/test-model para Claude sólo permite fallback si Messages no existe', async () => {
+	const stored = provider('claude', { id: 'p1', model: 'claude-opus-4-8' })
+	const env = backend([stored])
+	const calledUrls = []
+	env.context.probeSmart = async (url) => {
+		calledUrls.push(url)
+		if (url.includes('/messages')) {
+			return { ok: false, httpStatus: 404, ms: 5, json: { error: { message: 'unknown request url' } } }
+		}
+		if (url.includes('/responses')) return { ok: true, httpStatus: 200, ms: 5, json: { output_text: 'pong' } }
+		return { ok: false, httpStatus: 500, ms: 5 }
+	}
+	const res = await env.api.routes['POST /api/test-model']({ id: 'p1', model: 'claude-opus-4-8' })
+	assert.equal(res.ok, true)
+	assert.equal(res.target, 'responses')
+	assert.ok(calledUrls.some((u) => u.includes('/messages')))
+	assert.ok(calledUrls.some((u) => u.includes('/responses')))
+	assert.ok(!calledUrls.some((u) => u.includes('/chat/completions')))
+})
+
+test('runTest para modelo Claude empieza por Anthropic y no consulta Responses ni Chat', async () => {
+	const env = backend([])
+	const calledUrls = []
+	env.context.probeSmart = async (url) => {
+		calledUrls.push(url)
+		if (url.includes('/messages')) {
+			return { ok: true, httpStatus: 200, ms: 15, json: { content: [{ text: 'pong' }] } }
+		}
+		return { ok: false, httpStatus: 404 }
+	}
+	const res = await env.api.runTest({ baseUrl: 'https://relay.test/v1', apiKey: 'sk-test', model: 'claude-opus-4-8' })
+	assert.equal(res.verdict, 'claude_only')
+	assert.equal(res.checks.anthropic?.status, 'pass')
+	assert.equal(res.checks.responses?.status, 'warn')
+	assert.ok(calledUrls.some((u) => u.includes('/messages')))
+	assert.ok(!calledUrls.some((u) => u.includes('/responses')))
+	assert.ok(!calledUrls.some((u) => u.includes('/chat/completions')))
 })
