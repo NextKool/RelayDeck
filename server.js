@@ -4472,6 +4472,14 @@ function openBrowser(url) {
 }
 
 ensureHome()
+server.on('error', (err) => {
+	if (err.code === 'EADDRINUSE') {
+		console.error(`\n[AVISO] El puerto ${PORT} ya está en uso. Ya hay otra instancia de RelayDeck activa.\n`)
+		process.exit(1)
+	}
+	console.error('\n[ERROR en RelayDeck]:', err)
+	process.exit(1)
+})
 server.listen(PORT, HOST, () => {
 	console.log(`
   RelayDeck     http://${HOST}:${PORT}`)
