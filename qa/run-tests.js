@@ -75,12 +75,15 @@ function createTempDirs() {
 	const base = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-test-'))
 	const panelHome = path.join(base, 'panel')
 	const codexHome = path.join(base, 'codex')
+	const claudeHome = path.join(base, 'claude')
 	fs.mkdirSync(panelHome, { recursive: true })
 	fs.mkdirSync(codexHome, { recursive: true })
+	fs.mkdirSync(claudeHome, { recursive: true })
 	return {
 		base,
 		panelHome,
 		codexHome,
+		claudeHome,
 		cleanup: () => {
 			try {
 				fs.rmSync(base, { recursive: true, force: true })
@@ -89,7 +92,7 @@ function createTempDirs() {
 	}
 }
 
-function startPanelProcess({ panelPort, panelHome, codexHome }) {
+function startPanelProcess({ panelPort, panelHome, codexHome, claudeHome }) {
 	return new Promise((resolve, reject) => {
 		const proc = fork(path.join(ROOT_DIR, 'server.js'), [], {
 			env: {
@@ -97,6 +100,7 @@ function startPanelProcess({ panelPort, panelHome, codexHome }) {
 				CODEX_PANEL_PORT: String(panelPort),
 				CODEX_PANEL_HOME: panelHome,
 				CODEX_HOME: codexHome,
+				CLAUDE_HOME: claudeHome || path.join(panelHome, 'claude'),
 				CODEX_PANEL_TIMEOUT_MS: '5000',
 				CODEX_PANEL_SLOW_MS: '1000',
 				CODEX_PANEL_NO_OPEN: '1',
@@ -961,6 +965,7 @@ async function runMultiterminalAndYoloSuite() {
 			panelPort,
 			panelHome: envDirs.panelHome,
 			codexHome: envDirs.codexHome,
+			claudeHome: envDirs.claudeHome,
 		})
 
 		await test('Nuevo proveedor default a approvalPolicy: never y sandboxMode: danger-full-access', async () => {
@@ -1009,6 +1014,42 @@ async function runMultiterminalAndYoloSuite() {
 			assert(state.data.claude, 'Debe devolver estado de claude')
 			assert.strictEqual(state.data.claude.isYolo, true, 'isYolo debe ser true')
 			assert.strictEqual(state.data.claude.hasProviderEnv, false, 'hasProviderEnv debe ser false tras limpieza')
+		})
+
+		await test('/api/apply-claude acepta model dinámico y limpia claves viejas de Bedrock', async () => {
+			// Simular un settings.json previo con Amazon Bedrock
+			const claudeFile = path.join(envDirs.claudeHome, 'settings.json')
+			fs.mkdirSync(path.dirname(claudeFile), { recursive: true })
+			fs.writeFileSync(claudeFile, JSON.stringify({
+				env: {
+					CLAUDE_CODE_USE_BEDROCK: '1',
+					AWS_REGION: 'us-east-1',
+					AWS_BEARER_TOKEN_BEDROCK: 'token-viejo-aws',
+					ANTHROPIC_DEFAULT_SONNET_MODEL: 'us.anthropic.claude-sonnet-4-6',
+				}
+			}, null, 2))
+
+			// Registrar un proveedor sin modelo preestablecido
+			const reg = await request(`http://127.0.0.1:${panelPort}/api/provider`, {
+				method: 'POST',
+				json: { label: 'Test Claude', baseUrl: 'https://api.justwoker.icu/v1', apiKey: 'sk-test-key' }
+			})
+			assert(reg.ok, 'Debe registrar proveedor Test Claude')
+			const provId = reg.data.provider.id
+
+			// Aplicar en Claude enviando el modelo dinámico elegido en la UI
+			const applyRes = await request(`http://127.0.0.1:${panelPort}/api/apply-claude`, {
+				method: 'POST',
+				json: { id: provId, model: 'claude-opus-4-8' }
+			})
+			assert(applyRes.ok, 'apply-claude debe responder 200 OK con model en body: ' + applyRes.status + ' ' + applyRes.text)
+
+			const writtenSettings = JSON.parse(fs.readFileSync(claudeFile, 'utf8'))
+			assert.strictEqual(writtenSettings.env.ANTHROPIC_MODEL, 'claude-opus-4-8', 'ANTHROPIC_MODEL debe ser el modelo elegido')
+			assert.strictEqual(writtenSettings.env.ANTHROPIC_AUTH_TOKEN, 'sk-test-key', 'ANTHROPIC_AUTH_TOKEN debe estar presente')
+			assert.strictEqual(writtenSettings.env.CLAUDE_CODE_USE_BEDROCK, undefined, 'CLAUDE_CODE_USE_BEDROCK debe ser eliminado')
+			assert.strictEqual(writtenSettings.env.AWS_BEARER_TOKEN_BEDROCK, undefined, 'AWS_BEARER_TOKEN_BEDROCK debe ser eliminado')
+			assert.strictEqual(writtenSettings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, undefined, 'ANTHROPIC_DEFAULT_SONNET_MODEL debe ser eliminado')
 		})
 	} finally {
 		if (panelProc) panelProc.kill()

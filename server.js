@@ -1861,6 +1861,7 @@ function rootValues(provider) {
 }
 
 const CONFIG_PATH = () => path.join(CODEX_HOME, 'config.toml')
+const CLAUDE_PATH = () => path.join(process.env.CLAUDE_HOME || path.join(os.homedir(), '.claude'), 'settings.json')
 
 /**
  * Rescata claves que solo tienen sentido en la RAIZ y acabaron dentro de un
@@ -2182,7 +2183,7 @@ const FILES = {
 	},
 	get claude() {
 		return {
-			path: path.join(os.homedir(), '.claude', 'settings.json'),
+			path: CLAUDE_PATH(),
 			label: 'Claude Code — settings.json',
 			kind: 'json',
 			template: '{\n  "env": {}\n}\n',
@@ -2341,16 +2342,21 @@ function usageGuide(provider, target = 'codex') {
 		: '~/.claude/settings.json'
 
 	if (target === 'claude') {
-		const claudeFile = path.join(os.homedir(), '.claude', 'settings.json')
+		const claudeFile = CLAUDE_PATH()
 		let currentSettings = {}
 		try {
 			if (fs.existsSync(claudeFile)) currentSettings = JSON.parse(fs.readFileSync(claudeFile, 'utf8'))
 		} catch {}
 
+		const isProviderEnvKey = (k) => /^(ANTHROPIC_|AWS_|CLAUDE_CODE_USE_)/i.test(k)
+		const userEnv = Object.fromEntries(
+			Object.entries(currentSettings.env || {}).filter(([k]) => !isProviderEnvKey(k))
+		)
+
 		const mergedPreview = {
 			...currentSettings,
 			env: {
-				...(currentSettings.env || {}),
+				...userEnv,
 				ANTHROPIC_BASE_URL: claudeBaseUrl,
 				ANTHROPIC_AUTH_TOKEN: keyVal,
 				ANTHROPIC_MODEL: provider.model || '<modelo>',
@@ -2590,7 +2596,7 @@ function serveStatic(req, res) {
 
 function readClaudeConfig() {
 	try {
-		const file = path.join(os.homedir(), '.claude', 'settings.json')
+		const file = CLAUDE_PATH()
 		if (!fs.existsSync(file)) return { exists: false, hasProviderEnv: false, isYolo: false, baseUrl: '', model: '', apiKey: '' }
 		const json = JSON.parse(fs.readFileSync(file, 'utf8'))
 		const env = json?.env || {}
@@ -2602,14 +2608,8 @@ function readClaudeConfig() {
 			env.ANTHROPIC_DEFAULT_HAIKU_MODEL ||
 			''
 		const apiKey = env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY || ''
-		const hasProviderEnv = Boolean(
-			baseUrl ||
-			apiKey ||
-			env.ANTHROPIC_MODEL ||
-			env.ANTHROPIC_DEFAULT_OPUS_MODEL ||
-			env.ANTHROPIC_DEFAULT_SONNET_MODEL ||
-			env.ANTHROPIC_DEFAULT_HAIKU_MODEL
-		)
+		const isProvKey = (k) => /^(ANTHROPIC_|AWS_|CLAUDE_CODE_USE_)/i.test(k)
+		const hasProviderEnv = Object.keys(env).some(isProvKey)
 		const isYolo =
 			json?.permissions?.defaultMode === 'bypassPermissions' &&
 			json?.skipDangerousModePermissionPrompt === true
@@ -2632,7 +2632,7 @@ function readClaudeConfig() {
 function cleanClaudeConfig(provider) {
 	if (!provider || !provider.baseUrl) return
 	try {
-		const file = path.join(os.homedir(), '.claude', 'settings.json')
+		const file = CLAUDE_PATH()
 		if (!fs.existsSync(file)) return
 		const json = JSON.parse(fs.readFileSync(file, 'utf8'))
 		const env = json?.env
@@ -3918,11 +3918,17 @@ const routes = {
 		const providers = readStore()
 		const provider = providers.find((p) => p.id === body.id)
 		if (!provider) throw new Error('Provider desconocido')
-		if (!provider.model) throw new Error('Elige un modelo primero')
+		const chosenModel = String(body.model || provider.model || '').trim()
+		if (!chosenModel) throw new Error('Elige un modelo primero')
 		if (!provider.apiKey) throw new Error('Falta la API key')
 
-		const dir = path.join(os.homedir(), '.claude')
-		const file = path.join(dir, 'settings.json')
+		if (body.model && provider.model !== chosenModel) {
+			provider.model = chosenModel
+			writeStore(providers)
+		}
+
+		const file = CLAUDE_PATH()
+		const dir = path.dirname(file)
 		fs.mkdirSync(dir, { recursive: true })
 
 		let current = {}
@@ -3940,11 +3946,16 @@ const routes = {
 		}
 
 		const previousEnv = current.env && typeof current.env === 'object' && !Array.isArray(current.env) ? current.env : {}
+		const isProviderEnvKey = (k) => /^(ANTHROPIC_|AWS_|CLAUDE_CODE_USE_)/i.test(k)
+		const userEnv = Object.fromEntries(
+			Object.entries(previousEnv).filter(([k]) => !isProviderEnvKey(k))
+		)
+
 		current.env = {
-			...previousEnv,
+			...userEnv,
 			ANTHROPIC_BASE_URL: String(provider.baseUrl).replace(/\/v1\/?$/i, ''),
 			ANTHROPIC_AUTH_TOKEN: provider.apiKey,
-			ANTHROPIC_MODEL: provider.model,
+			ANTHROPIC_MODEL: chosenModel,
 		}
 		if (!current.permissions) {
 			current.permissions = { defaultMode: 'bypassPermissions', allow: ['Bash'] }
@@ -3958,8 +3969,8 @@ const routes = {
 
 	/** Prepara settings.json de Claude Code para modo multiterminal (limpia env de proveedores y fija modo YOLO). */
 	'POST /api/prepare-claude-multiterminal': async () => {
-		const dir = path.join(os.homedir(), '.claude')
-		const file = path.join(dir, 'settings.json')
+		const file = CLAUDE_PATH()
+		const dir = path.dirname(file)
 		fs.mkdirSync(dir, { recursive: true })
 
 		let current = {}
@@ -3976,17 +3987,15 @@ const routes = {
 			backupFile(file)
 		}
 
-		const env = current.env && typeof current.env === 'object' && !Array.isArray(current.env) ? { ...current.env } : {}
-		delete env.ANTHROPIC_BASE_URL
-		delete env.ANTHROPIC_AUTH_TOKEN
-		delete env.ANTHROPIC_API_KEY
-		delete env.ANTHROPIC_MODEL
-		delete env.ANTHROPIC_DEFAULT_OPUS_MODEL
-		delete env.ANTHROPIC_DEFAULT_SONNET_MODEL
-		delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL
+		const isProviderEnvKey = (k) => /^(ANTHROPIC_|AWS_|CLAUDE_CODE_USE_)/i.test(k)
+		const env = Object.fromEntries(
+			Object.entries(current.env && typeof current.env === 'object' && !Array.isArray(current.env) ? current.env : {})
+				.filter(([k]) => !isProviderEnvKey(k))
+		)
 
 		if (env.DISABLE_TELEMETRY === undefined) env.DISABLE_TELEMETRY = '1'
 		if (env.DISABLE_AUTOUPDATER === undefined) env.DISABLE_AUTOUPDATER = '1'
+		if (env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC === undefined) env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
 
 		current.env = env
 		current.permissions = {

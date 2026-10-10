@@ -92,11 +92,13 @@ button.b.go:hover:not(:disabled){filter:brightness(1.15);color:#04141a}
 button.b.ko{color:var(--mag);border-color:rgba(255,42,109,.4)}
 button.b.ko:hover:not(:disabled){border-color:var(--mag);color:var(--mag);box-shadow:var(--gm)}
 button.b.on{color:var(--lime);border-color:var(--lime);box-shadow:var(--gl)}
+button.b.warn{color:var(--amber);border-color:rgba(255,182,39,.45)}
+button.b.warn:hover:not(:disabled){border-color:var(--amber);box-shadow:0 0 10px rgba(255,182,39,.35)}
 button.b.xs{min-height:25px;padding:0 8px;font-size:10px;letter-spacing:.04em}
 .row{display:flex;gap:7px;flex-wrap:wrap}
 
-.tag{display:inline-block;vertical-align:middle;max-width:min(280px,45vw);overflow:hidden;text-overflow:ellipsis;
-	padding:2px 7px;border:1px solid;border-radius:2px;
+.tag{display:inline-flex;align-items:center;justify-content:center;line-height:1;max-width:min(280px,45vw);overflow:hidden;text-overflow:ellipsis;
+	padding:3px 7px;border:1px solid;border-radius:2px;
 	font-size:10px;letter-spacing:.09em;text-transform:uppercase;white-space:nowrap}
 .tag.ok{color:var(--lime);border-color:rgba(116,255,90,.45);background:rgba(116,255,90,.09)}
 .tag.warn{color:var(--amber);border-color:rgba(255,182,39,.45);background:rgba(255,182,39,.09)}
@@ -140,7 +142,8 @@ table.m td.p{width:28px}
 table.m input[type=checkbox]{width:13px;height:13px;accent-color:var(--cyan);cursor:pointer}
 
 /* ══════════════════════════════════════ usar en */
-.dest{display:flex;gap:5px;padding:11px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.dest{display:flex;align-items:center;gap:5px;padding:11px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.dest .sp{margin-left:auto}
 .dest button{min-height:29px;padding:0 12px;font:500 11px/1 var(--mono);letter-spacing:.06em;
 	color:var(--txt2);background:var(--pane2);border:1px solid var(--line2);border-radius:var(--r);cursor:pointer}
 .dest button[aria-pressed=true]{color:var(--cyan);border-color:var(--cyan);background:rgba(0,229,255,.1)}
@@ -1976,9 +1979,10 @@ function paneUse(p) {
 					const key = S.keys[p.id] || p.apiKey || ''
 					const dispJson = maskKeyInText(rawJson, key)
 					return `<pre class="j">${esc(dispJson)}</pre>
-						<div class="row" style="margin-top:6px">
+						<div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">
 						<button class="b xs" data-a="copy" data-t="${esc(rawJson)}">Copiar JSON</button>
-						${g.supported !== false ? `<button class="b xs go" data-a="applyclaude" data-p="${esc(p.id)}">Escribirlo por mí</button>` : ''}</div>`
+						${g.supported !== false ? `<button class="b xs go" data-a="applyclaude" data-p="${esc(p.id)}" data-m="${esc(m || '')}">Escribirlo por mí</button>` : ''}
+						${S.claude?.hasProviderEnv ? `<button class="b xs warn" data-a="prepclaude" title="Limpia variables fijas de settings.json para que mande la terminal">Limpiar proveedor fijo (usar terminal)</button>` : ''}</div>`
 				})()}
 			`).join('')
 		) : ''
@@ -2848,17 +2852,23 @@ document.addEventListener('click', async (e) => {
 	}
 
 	if (a === 'applyclaude') {
+		const p = cur()
+		const m = el.dataset.m || curModel(p) || p?.model || ''
+		if (!m) {
+			toast('Elige un modelo primero', true)
+			return
+		}
 		const ok = await confirmModal(
 			'Fijar en Claude Code',
-			'¿Escribir esta configuración en <code>~/.claude/settings.json</code>?<br><br>Se configurará de forma global en tu máquina, conservando los permisos en Modo YOLO y creando una copia de respaldo automática.',
+			`¿Escribir esta configuración en <code>~/.claude/settings.json</code>?<br><br><b>Modelo seleccionado:</b> <code>${esc(m)}</code><br><br>Se configurará de forma global en tu máquina, limpiando variables conflictivas de Bedrock, conservando los permisos en Modo YOLO y creando una copia de respaldo automática.`,
 			{ confirmText: 'Escribir configuración' }
 		)
 		if (!ok) return
 		el.disabled = true; el.innerHTML = '<span class="blink">●</span> Escribiendo...'
 		try {
-			const r = await api('/api/apply-claude', { id })
+			const r = await api('/api/apply-claude', { id, model: m })
 			await refresh()
-			if (cur()?.model) loadGuide(cur().id)
+			if (cur()?.model || m) loadGuide(cur().id)
 			toast(`Escrito en ${r.file}${r.backedUp ? ' (respaldo hecho)' : ''}`)
 		} catch (err) { toast(err.message, true); el.disabled = false; el.textContent = 'Aplicar en settings.json' }
 		return
